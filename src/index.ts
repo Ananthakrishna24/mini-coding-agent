@@ -1,7 +1,10 @@
-// Entry point. For now: verify the model connection. Grows into the agent loop.
-import { chat } from "./llm";
+// Entry point: run a goal through the agent. Pass it on the command line.
+import { run } from "./agent";
 
-const res = await chat([{ role: "user", content: "Say hello in one sentence." }]);
+const goal =
+  process.argv.slice(2).join(" ") ||
+  "List the files here, read package.json, and tell me the project name.";
 
-console.log(res.choices[0].message.content);
-console.log("usage:", res.usage);
+console.log(`> ${goal}\n`);
+const summary = await run(goal);
+console.log(`\n${summary}`);
