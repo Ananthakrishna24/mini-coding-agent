@@ -3,6 +3,7 @@
 import type OpenAI from "openai";
 import { chat } from "./llm";
 import { toolSchemas, dispatch } from "./tools";
+import { countMessages, overBudget, INPUT_BUDGET } from "./context";
 
 const MAX_TURNS = 12;
 
@@ -31,6 +32,12 @@ export async function run(goal: string): Promise<string> {
       const preview = result.slice(0, 100).replace(/\s+/g, " ");
       console.log(`  · ${call.function.name}(${call.function.arguments}) -> ${preview}`);
     }
+
+    // Watch context size. Real usage is ground truth; our estimate decides when to act later.
+    const used = countMessages(messages);
+    const actual = res.usage?.prompt_tokens;
+    console.log(`  ~ context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${INPUT_BUDGET} budget`);
+    if (overBudget(messages)) console.warn("  ! over budget — history needs shrinking (Task 3.2)");
   }
 
   return `stopped: hit ${MAX_TURNS}-turn limit`;
