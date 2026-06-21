@@ -1,0 +1,20 @@
+{
+  "name": "mini-coding-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A minimal terminal coding agent powered by an LLM.",
+  "scripts": {
+    "dev": "tsx --env-file=.env src/index.ts",
+    "start": "tsx --env-file=.env src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openai": "^6.44.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
