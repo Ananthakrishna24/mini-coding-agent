@@ -75,7 +75,7 @@ export function createUI(): UI {
       if (timer) return;
       process.stdout.write(HIDE);
       timer = setInterval(() => {
-        process.stdout.write(`${CLEAR}  ${c.cyan(SPIN[(i = (i + 1) % SPIN.length)])} ${c.dim(label + "…")}`);
+        process.stdout.write(`${CLEAR}  ${c.primary(SPIN[(i = (i + 1) % SPIN.length)])} ${c.dim(label + "…")}`);
       }, 80);
     } else if (timer) {
       clearInterval(timer);

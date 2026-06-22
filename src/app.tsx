@@ -4,7 +4,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, type Item, type Picker } from "./store";
-import { c, describeModel, toolEntry, resultBody, iconize } from "./format";
+import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor } from "./format";
 
 const indent = (s: string) => `  ${s}`;
 
@@ -13,7 +13,7 @@ function ItemView({ item }: { item: Item }) {
     case "user":
       return (
         <Box marginTop={1}>
-          <Text>{`${c.cyan("›")} ${c.bold(item.text)}`}</Text>
+          <Text>{`${c.primary("›")} ${c.bold(item.text)}`}</Text>
         </Box>
       );
     case "warn":
@@ -66,7 +66,7 @@ function Spinner({ label }: { label: string }) {
     const t = setInterval(() => setF((n) => n + 1), 80);
     return () => clearInterval(t);
   }, []);
-  return <Text>{`${c.cyan(SPIN[f % SPIN.length])} ${c.dim(`${label}…`)}`}</Text>;
+  return <Text>{`${c.primary(SPIN[f % SPIN.length])} ${c.dim(`${label}…`)}`}</Text>;
 }
 
 // Live status under the scrollback: spinner while working, the plan checklist, and the model · ctx line.
@@ -103,7 +103,7 @@ function PickerView({ picker }: { picker: Picker }) {
   const view = items.slice(start, start + VIEW);
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text>{`${c.cyan("◉ pick a model")}  ${c.dim("↑↓ choose · type to filter · ⏎ select · esc cancel")}`}</Text>
+      <Text>{`${c.primary("◉ pick a model")}  ${c.dim("↑↓ choose · type to filter · ⏎ select · esc cancel")}`}</Text>
       <Text>{`  ${c.dim("filter:")} ${query || c.dim("(all tool-capable)")}`}</Text>
       {loading ? (
         <Text>{c.dim("  loading catalog…")}</Text>
@@ -113,7 +113,7 @@ function PickerView({ picker }: { picker: Picker }) {
         view.map((m, i) => {
           const active = start + i === sel;
           return (
-            <Text key={m.id} color={active ? "cyan" : undefined}>
+            <Text key={m.id} color={active ? getPrimaryColor() : undefined}>
               {`  ${active ? "›" : " "} ${describeModel(m, m.id)}`}
             </Text>
           );
@@ -171,15 +171,15 @@ function Prompt() {
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box borderStyle="round" borderColor={busy ? "yellow" : "cyan"} paddingX={1} width="100%">
-        <Text>{c.cyan("›")} </Text>
+      <Box borderStyle="round" borderColor={busy ? "yellow" : getPrimaryColor()} paddingX={1} width="100%">
+        <Text>{c.primary("›")} </Text>
         <Text>{busy ? c.dim(buf || "working…") : buf}</Text>
         {!busy && <Text>{c.dim("▏")}</Text>}
       </Box>
       {menu.length > 0 && (
         <Box flexDirection="column" paddingLeft={1}>
           {menu.map((m, i) => (
-            <Text key={m.name} color={i === Math.min(sel, menu.length - 1) ? "cyan" : undefined}>
+            <Text key={m.name} color={i === Math.min(sel, menu.length - 1) ? getPrimaryColor() : undefined}>
               {`${i === Math.min(sel, menu.length - 1) ? "›" : " "} ${m.name.padEnd(10)} ${c.dim(m.desc)}`}
             </Text>
           ))}

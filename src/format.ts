@@ -3,9 +3,10 @@
 // and the Ink UI (app.tsx, interactive) render identically. Color is util.styleText (Node ≥20),
 // gated on a TTY so piped/CI/NO_COLOR output stays plain and grep-able.
 import { styleText } from "node:util";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { diffLines } from "./diff";
 import { renderMarkdown, type Palette } from "./md";
 import type { ModelInfo } from "./llm";
@@ -15,10 +16,65 @@ type Style = Parameters<typeof styleText>[0];
 type Color = Extract<Style, string>; // a single styleText color name (Style also allows an array of them)
 const paint = (style: Style, s: string) => (useColor ? styleText(style, s) : s);
 
+// --- primary accent color (configurable via /colors, persisted to ~/.minion-code/color.txt) ---
+// Stored as a hex string and rendered with 24-bit truecolor so any shade works — named terminal
+// colors can't hit "dark orange". Falls back to plain text under NO_COLOR / non-TTY like every paint.
+const COLOR_FILE = join(homedir(), ".minion-code", "color.txt");
+const DEFAULT_COLOR = "#ff8c00"; // dark orange
+
+export const COLOR_PRESETS: { name: string; hex: string }[] = [
+  { name: "orange", hex: "#ff8c00" },
+  { name: "cyan", hex: "#22d3ee" },
+  { name: "blue", hex: "#3b82f6" },
+  { name: "green", hex: "#22c55e" },
+  { name: "magenta", hex: "#d946ef" },
+  { name: "purple", hex: "#a855f7" },
+  { name: "red", hex: "#ef4444" },
+  { name: "yellow", hex: "#eab308" },
+];
+
+const loadColor = (): string => {
+  try {
+    const v = readFileSync(COLOR_FILE, "utf8").trim();
+    return /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : DEFAULT_COLOR;
+  } catch {
+    return DEFAULT_COLOR;
+  }
+};
+
+let primaryHex = loadColor();
+export const getPrimaryColor = () => primaryHex;
+
+// Accepts a preset name or #rrggbb; resolves, applies for the session, and persists. Returns the hex
+// or null when the input matches neither a preset nor a valid hex.
+export function setPrimaryColor(input: string): string | null {
+  const s = input.trim().toLowerCase();
+  const hex = /^#[0-9a-f]{6}$/.test(s) ? s : COLOR_PRESETS.find((p) => p.name === s)?.hex;
+  if (!hex) return null;
+  primaryHex = hex;
+  try {
+    mkdirSync(join(homedir(), ".minion-code"), { recursive: true });
+    writeFileSync(COLOR_FILE, hex);
+  } catch {
+    /* best-effort persist; the session still uses the new color */
+  }
+  return hex;
+}
+
+const hexToRgb = (hex: string): [number, number, number] => [
+  parseInt(hex.slice(1, 3), 16),
+  parseInt(hex.slice(3, 5), 16),
+  parseInt(hex.slice(5, 7), 16),
+];
+// Paint a string in an arbitrary hex (used for /colors swatches); the accent itself uses c.primary.
+export const paintHex = (hex: string, s: string) =>
+  useColor ? `\x1b[38;2;${hexToRgb(hex).join(";")}m${s}\x1b[39m` : s;
+const primaryPaint = (s: string) => paintHex(primaryHex, s);
+
 export const c = {
   dim: (s: string) => paint("dim", s),
   bold: (s: string) => paint("bold", s),
-  cyan: (s: string) => paint("cyan", s),
+  primary: (s: string) => primaryPaint(s),
   green: (s: string) => paint("green", s),
   red: (s: string) => paint("red", s),
   yellow: (s: string) => paint("yellow", s),
@@ -53,12 +109,12 @@ export function wrap(s: string, width: number): string[] {
   return out;
 }
 
-// How the Markdown renderer paints spans — bold, italic, dim, cyan headings, yellow inline code.
+// How the Markdown renderer paints spans — bold, italic, dim, primary headings, yellow inline code.
 export const md: Palette = {
   bold: c.bold,
   italic: (s) => paint("italic", s),
   dim: c.dim,
-  heading: (s) => paint(["bold", "cyan"], s),
+  heading: (s) => primaryPaint(paint("bold", s)),
   code: (s) => paint("yellow", s),
 };
 
@@ -142,7 +198,7 @@ function writeRows(content: string): string[] {
 // update_plan returns lines like "[x] step"; map each marker to a colored status icon.
 export const iconize = (l: string): string =>
   l.startsWith("[x]") ? c.green(`✓ ${l.slice(4)}`)
-  : l.startsWith("[~]") ? c.cyan(`▶ ${l.slice(4)}`)
+  : l.startsWith("[~]") ? c.primary(`▶ ${l.slice(4)}`)
   : l.startsWith("[ ]") ? c.dim(`☐ ${l.slice(4)}`)
   : l;
 
@@ -278,6 +334,6 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
   // Box it, measuring *visible* width so the ANSI colour codes don't throw the right border off.
   const w = Math.max(...lines.map(visibleLen));
   const pad = (s: string) => s + " ".repeat(w - visibleLen(s));
-  const rule = (l: string, r: string) => c.cyan(l + "─".repeat(w + 2) + r);
-  return [rule("╭", "╮"), ...lines.map((s) => `${c.cyan("│")} ${pad(s)} ${c.cyan("│")}`), rule("╰", "╯")];
+  const rule = (l: string, r: string) => c.primary(l + "─".repeat(w + 2) + r);
+  return [rule("╭", "╮"), ...lines.map((s) => `${c.primary("│")} ${pad(s)} ${c.primary("│")}`), rule("╰", "╯")];
 }

@@ -6,7 +6,7 @@ import { getModel, setModel, modelInfo, searchModels, getContextWindow, type Mod
 import { inputBudget } from "./context";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
-import { c, describeModel, fmtTokens, fmtPrice, bannerLines } from "./format";
+import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS, paintHex } from "./format";
 
 // One scrollback entry. Tool calls, warnings, the user's lines, slash-command output, and run results
 // all land here and render in Ink's <Static> region so they persist as the log scrolls.
@@ -152,14 +152,15 @@ async function runGoal(goal: string) {
 
 const HELP = [
   c.bold("commands"),
-  `  ${c.cyan("/model")}            open the model picker (↑↓ to choose, type to filter, ⏎ select, esc cancel)`,
-  `  ${c.cyan("/model <query>")}    open the picker pre-filtered`,
-  `  ${c.cyan("/model <id>")}       switch to an exact OpenRouter id`,
-  `  ${c.cyan("/status")}           model, context window, working dir`,
-  `  ${c.cyan("/usage")}            tokens + estimated cost this session`,
-  `  ${c.cyan("/context")}          context-window usage right now`,
-  `  ${c.cyan("/clear")}            clear the scrollback`,
-  `  ${c.cyan("/help")}             this list`,
+  `  ${c.primary("/model")}            open the model picker (↑↓ to choose, type to filter, ⏎ select, esc cancel)`,
+  `  ${c.primary("/model <query>")}    open the picker pre-filtered`,
+  `  ${c.primary("/model <id>")}       switch to an exact OpenRouter id`,
+  `  ${c.primary("/colors")}           change the accent color (presets or #rrggbb)`,
+  `  ${c.primary("/status")}           model, context window, working dir`,
+  `  ${c.primary("/usage")}            tokens + estimated cost this session`,
+  `  ${c.primary("/context")}          context-window usage right now`,
+  `  ${c.primary("/clear")}            clear the scrollback`,
+  `  ${c.primary("/help")}             this list`,
   `  ${c.dim("exit · Ctrl-C")}     quit`,
 ];
 
@@ -220,6 +221,23 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
       // pre-filtered by the arg. No arg → the full tool-capable list.
       if (arg.includes("/")) return activate(arg);
       return openModelPicker(arg);
+    case "/colors": {
+      // No arg → list presets (each swatched in its own color) + the current pick. An arg is a preset
+      // name or #rrggbb; setPrimaryColor resolves + persists it, returning null on a bad input.
+      if (!arg) {
+        const cur = getPrimaryColor();
+        const lines = [c.bold("colors"), `  current  ${paintHex(cur, "●")} ${c.dim(cur)}`, ""];
+        for (const p of COLOR_PRESETS) {
+          const mark = p.hex === cur ? "●" : "○";
+          lines.push(`  ${paintHex(p.hex, `${mark} ${p.name.padEnd(9)}`)} ${c.dim(p.hex)}`);
+        }
+        lines.push("", c.dim("  /colors <name>    pick a preset"), c.dim("  /colors #rrggbb   custom hex"));
+        return push({ kind: "info", lines });
+      }
+      const hex = setPrimaryColor(arg);
+      if (!hex) return push({ kind: "info", lines: [c.yellow(`unknown color "${arg}" — /colors for the list`)] });
+      return push({ kind: "info", lines: [c.green(`✔ color → ${hex}`)] });
+    }
     case "/status": {
       const win = getContextWindow();
       return push({
@@ -270,6 +288,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
 // Command names for the "/" autocomplete menu in the input.
 export const COMMANDS = [
   { name: "/model", desc: "show or switch the model" },
+  { name: "/colors", desc: "change the accent color" },
   { name: "/status", desc: "model, window, working dir" },
   { name: "/usage", desc: "tokens + cost this session" },
   { name: "/context", desc: "context-window usage" },

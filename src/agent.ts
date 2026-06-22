@@ -5,6 +5,7 @@ import type OpenAI from "openai";
 import { chat, getContextWindow } from "./llm";
 import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, inputBudget } from "./context";
+import { loadMemory } from "./memory";
 import { thinkingVerb, toolVerb } from "./format";
 import type { UI } from "./ui";
 
@@ -34,7 +35,11 @@ function buildSystemPrompt(): string {
     `Date: ${new Date().toISOString().slice(0, 10)}`, // date, not time — a clock would bust the cache
   ].join("\n");
 
-  return `${SYSTEM_RULES}\n\n## Environment\n${env}`;
+  // Changing-last block: environment (changes daily) then memory (changes whenever the agent edits its
+  // notes) sit after the fixed rules, so the big cacheable prefix stays byte-identical across runs.
+  // Empty when there's no AGENT.md, so a fresh project carries no dangling section.
+  const memory = loadMemory();
+  return `${SYSTEM_RULES}\n\n## Environment\n${env}${memory ? `\n\n${memory}` : ""}`;
 }
 
 export async function run(goal: string, ui: UI): Promise<RunResult> {
