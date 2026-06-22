@@ -7,21 +7,44 @@ import { countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
 
 const MAX_TURNS = 12;
 
-const SYSTEM =
-  "You are a coding agent working inside a project directory. Use the tools to read, " +
-  "write, and run code to accomplish the task. When the task is complete, reply with a " +
-  "short summary and stop calling tools.";
+// Standing orders. Fixed block first, environment last: an identical prefix is what lets the
+// provider cache it across turns, and the cache match stops at the first byte that differs.
+function buildSystemPrompt(): string {
+  const rules = [
+    "You are a coding agent working inside a project directory.",
+    "Read a file before you edit it; prefer small, targeted edits over full rewrites.",
+    "After changing code, run the relevant check or test.",
+    "Stay inside the workspace. Don't delete or overwrite a file without a clear reason.",
+    "When the task is done, reply with a short summary and stop calling tools.",
+  ].join("\n");
+
+  const env = [
+    `Working directory: ${process.cwd()}`,
+    `Platform: ${process.platform}`,
+    `Date: ${new Date().toISOString().slice(0, 10)}`, // date, not time — a clock would bust the cache
+  ].join("\n");
+
+  return `${rules}\n\n## Environment\n${env}`;
+}
 
 export async function run(goal: string): Promise<string> {
+  // Built once, never touched during the run, so the head stays byte-identical = cacheable.
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM },
+    { role: "system", content: buildSystemPrompt() },
     { role: "user", content: goal },
   ];
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const res = await chat(messages, toolSchemas);
-    const msg = res.choices[0].message;
+    const choice = res.choices?.[0];
+    if (!choice) throw new Error("model returned no choices");
+    const msg = choice.message;
     messages.push(msg);
+
+    // Output hit the token cap mid-reply — don't treat a cut-off answer as a finished one.
+    if (choice.finish_reason === "length") {
+      console.warn("  ! model output truncated (hit max output tokens)");
+    }
 
     if (!msg.tool_calls?.length) return msg.content ?? "(no output)";
 

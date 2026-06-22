@@ -10,6 +10,8 @@ export const MODEL = "deepseek/deepseek-v4-flash";
 export const client = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
+  maxRetries: 4, // SDK retries 408/409/429/5xx + connection drops with exponential backoff + jitter
+  timeout: 120_000, // ms per request — fail a hung connection instead of stalling the whole run
 });
 
 // One completion. Pass tools to let the model call them (tool_choice: auto).

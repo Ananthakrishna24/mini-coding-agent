@@ -95,8 +95,8 @@ const run_bash: Tool = {
     try {
       const { stdout, stderr } = await execFileAsync("bash", ["-c", command], {
         cwd: WORKSPACE,
-        timeout: 30_000,
-        maxBuffer: 1024 * 1024,
+        timeout: 120_000, // real builds/test suites run long; capResult trims the output later
+        maxBuffer: 10 * 1024 * 1024, // let verbose runs finish instead of dying on ENOBUFS
       });
       return `exit 0\n${stdout}${stderr}`;
     } catch (e: any) {

@@ -6,5 +6,11 @@ const goal =
   "List the files here, read package.json, and tell me the project name.";
 
 console.log(`> ${goal}\n`);
-const summary = await run(goal);
-console.log(`\n${summary}`);
+try {
+  const summary = await run(goal);
+  console.log(`\n${summary}`);
+} catch (e: any) {
+  // Retries are exhausted by here — give the user one clean line, not a stack trace.
+  console.error(`\nagent failed: ${e.message ?? e}`);
+  process.exit(1);
+}
