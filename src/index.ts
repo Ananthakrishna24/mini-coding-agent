@@ -3,18 +3,20 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { run } from "./agent";
+import { MODEL } from "./llm";
 import { createUI, banner, resultLine, c } from "./ui";
 
 const ui = createUI();
 
 async function once(goal: string): Promise<boolean> {
+  const t0 = Date.now();
   try {
     const r = await run(goal, ui);
-    resultLine(r.success, r.summary);
+    resultLine(r.success, r.summary, Date.now() - t0);
     return r.success;
   } catch (e: any) {
     ui.thinking(false); // kill the spinner before printing — retries are already exhausted in run()
-    resultLine(false, `agent failed: ${e.message ?? e}`);
+    resultLine(false, `agent failed: ${e.message ?? e}`, Date.now() - t0);
     return false;
   }
 }
@@ -26,7 +28,7 @@ if (goal) {
 }
 
 // No goal → interactive chat. Top-level await keeps this flat; readline owns the prompt.
-banner();
+banner(MODEL);
 const rl = createInterface({ input, output });
 rl.on("SIGINT", () => process.exit(0)); // Ctrl-C exits; ui's exit handler restores the cursor
 
