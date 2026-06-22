@@ -1,23 +1,30 @@
-// OpenRouter chat client — the model-I/O layer the agent is built on. The model is switchable at
-// runtime (/model command); the catalog + per-model context/price come from OpenRouter's own API.
+// Chat client — the model-I/O layer the agent is built on. Talks to either OpenRouter or OpenAI
+// (OpenAI-compatible API; same SDK, different baseURL + key); the provider is resolved from the
+// environment. The model is switchable at runtime (/model command); the catalog + per-model
+// context/price come from the provider's own API and degrade gracefully when unavailable.
 import OpenAI from "openai";
+import { resolveProvider, PROVIDERS, type Provider } from "./provider";
 
-if (!process.env.OPENROUTER_API_KEY) {
-  throw new Error("OPENROUTER_API_KEY missing — copy .env.example to .env and add your key");
+const resolved = resolveProvider();
+if ("error" in resolved) {
+  throw new Error(`${resolved.error} — copy .env.example to .env, or run interactively to set it up`);
 }
+const provider: Provider = resolved.provider;
+const conf = PROVIDERS[provider];
 
-const DEFAULT_MODEL = process.env.AGENT_MODEL || "deepseek/deepseek-v4-flash";
+const DEFAULT_MODEL = process.env.AGENT_MODEL || conf.defaultModel;
 const DEFAULT_WINDOW = 128_000; // assumed context window until we learn the real one from the catalog
 
 let model = DEFAULT_MODEL;
 let contextWindow = DEFAULT_WINDOW; // kept in sync with the active model so the budget tracks it
 
+export const getProvider = () => provider;
 export const getModel = () => model;
 export const getContextWindow = () => contextWindow;
 
 export const client = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY,
+  ...(conf.baseURL ? { baseURL: conf.baseURL } : {}), // OpenAI uses the SDK default; OpenRouter overrides it
+  apiKey: resolved.apiKey,
   maxRetries: 4, // SDK retries 408/409/429/5xx + connection drops with exponential backoff + jitter
   timeout: 120_000, // ms per request — fail a hung connection instead of stalling the whole run
 });
@@ -34,7 +41,9 @@ export async function chat(
   });
 }
 
-// --- model catalog: context window + price, straight from OpenRouter ---
+// --- model catalog: context window + price. OpenRouter ships both in its catalog; OpenAI's
+// /v1/models lists ids only (no pricing, no context), so those fields stay 0 and the UI degrades
+// to "no catalog price" / the assumed window — same fallback the OpenRouter path uses on a miss. ---
 
 export type ModelInfo = {
   id: string;
@@ -47,9 +56,27 @@ export type ModelInfo = {
 
 let catalog: ModelInfo[] | null = null; // fetched once, then cached for the session
 
+// OpenAI's catalog has no tool-capability flag and lists embeddings/audio/image models alongside
+// chat ones. Keep the obvious chat/reasoning families and drop non-chat endpoints by name.
+function isOpenAIChatModel(id: string): boolean {
+  if (/embedding|whisper|tts|dall-e|audio|image|realtime|transcribe|moderation|search|codex/.test(id)) return false;
+  return /^(gpt-|o\d|chatgpt-)/.test(id);
+}
+
 export async function fetchModels(): Promise<ModelInfo[]> {
   if (catalog) return catalog;
-  const res = await fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(10_000) });
+
+  if (provider === "openai") {
+    // GET /v1/models needs the key; pricing/context aren't in the response, so leave them 0.
+    const res = await client.models.list();
+    catalog = res.data
+      .filter((m) => isOpenAIChatModel(m.id))
+      .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return catalog;
+  }
+
+  const res = await fetch(`${conf.baseURL}/models`, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`model catalog fetch failed: ${res.status}`);
   const { data } = (await res.json()) as { data: any[] };
   catalog = data.map((m) => ({
