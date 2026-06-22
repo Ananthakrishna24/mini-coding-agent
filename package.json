@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx --env-file=.env src/index.ts",
     "start": "tsx --env-file=.env src/index.ts",
-    "check": "tsx src/tools.check.ts && tsx src/context.check.ts && tsx src/permissions.check.ts && tsx src/diff.check.ts && tsx src/md.check.ts && tsx src/format.check.ts && tsx src/memory.check.ts && tsx src/spawn_agent.check.ts",
+    "check": "tsx src/tools.check.ts && tsx src/context.check.ts && tsx src/permissions.check.ts && tsx src/diff.check.ts && tsx src/md.check.ts && tsx src/format.check.ts && tsx src/memory.check.ts && tsx src/spawn_agent.check.ts && tsx src/provider.check.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
