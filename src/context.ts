@@ -24,3 +24,25 @@ export function countMessages(messages: OpenAI.ChatCompletionMessageParam[]): nu
 export function overBudget(messages: OpenAI.ChatCompletionMessageParam[]): boolean {
   return countMessages(messages) > INPUT_BUDGET;
 }
+
+// How many of the most recent messages to always keep — the agent's short-term working memory.
+const KEEP_TAIL = 8;
+
+// Shrink an over-budget history in place: keep the system prompt (index 0), the goal (index 1),
+// and the last few turns; drop the stale middle. A tool result must stay with the assistant call
+// that produced it, so the kept tail never starts on a `tool` message (that would orphan it).
+// v1 drops the middle and leaves a one-line marker; summarizing it instead is the next step up.
+export function compact(messages: OpenAI.ChatCompletionMessageParam[]): number {
+  if (messages.length <= KEEP_TAIL + 2) return 0; // nothing safe to drop
+
+  let cut = messages.length - KEEP_TAIL;
+  while (cut < messages.length && messages[cut].role === "tool") cut++;
+  if (cut <= 2) return 0; // tail reaches the head; nothing in the middle to drop
+
+  const removed = cut - 2;
+  messages.splice(2, removed, {
+    role: "user",
+    content: "[older turns were trimmed to stay within the context budget]",
+  });
+  return removed;
+}

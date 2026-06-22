@@ -1,7 +1,15 @@
 // Offline self-check for the tools layer — no model/network needed. Run: npm run check
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { dispatch } from "./tools";
+import { dispatch, capResult } from "./tools";
+
+// capResult: small results pass through; big ones keep head + tail and mark what was cut.
+assert.equal(capResult("short"), "short");
+const big = capResult("A".repeat(20_000) + "ZZZ");
+assert.ok(big.length < 20_000, "big result was trimmed");
+assert.ok(big.startsWith("AAA"), "kept the head");
+assert.ok(big.endsWith("ZZZ"), "kept the tail");
+assert.match(big, /chars omitted/);
 
 const f = ".agent-check.tmp";
 

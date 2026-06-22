@@ -111,6 +111,18 @@ const registry: Record<string, Tool> = { read_file, write_file, run_bash };
 // Schemas to hand the model.
 export const toolSchemas: OpenAI.ChatCompletionTool[] = Object.values(registry).map((t) => t.schema);
 
+// Cap one tool result before it enters the history. A single big read/run can blow the budget
+// in one turn; keep the top and bottom (signatures, errors, exit code) and drop the middle.
+// The model can re-read the range if it needs the gap.
+const MAX_TOOL_RESULT = 12_000; // chars ≈ ~3k tokens
+export function capResult(s: string): string {
+  if (s.length <= MAX_TOOL_RESULT) return s;
+  const head = s.slice(0, Math.floor(MAX_TOOL_RESULT * 0.7));
+  const tail = s.slice(-Math.floor(MAX_TOOL_RESULT * 0.2));
+  const cut = s.length - head.length - tail.length;
+  return `${head}\n… [${cut} chars omitted — re-read the range if needed] …\n${tail}`;
+}
+
 // Run one tool call. Never throws — errors come back as the result so the model can recover.
 export async function dispatch(name: string, argsJson: string): Promise<string> {
   const tool = registry[name];
@@ -124,7 +136,7 @@ export async function dispatch(name: string, argsJson: string): Promise<string> 
   }
 
   try {
-    return await tool.run(args);
+    return capResult(await tool.run(args));
   } catch (e: any) {
     return `error: ${e.message}`;
   }
