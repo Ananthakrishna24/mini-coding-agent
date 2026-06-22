@@ -1,35 +1,31 @@
 // The agent loop: call the model with tools, run any tool calls, feed results back, repeat
 // until the model stops calling tools or we hit the turn limit.
+import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
 import { chat } from "./llm";
 import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
+import type { UI } from "./ui";
 
 const MAX_TURNS = 12; // outer backstop for messy loops the signature guard can't catch
 const REPEAT_LIMIT = 3; // 3rd identical tool call (same name + args) = stuck; retrying won't help
 
-// Standing orders. Fixed block first, environment last: an identical prefix is what lets the
-// provider cache it across turns, and the cache match stops at the first byte that differs.
-function buildSystemPrompt(): string {
-  const rules = [
-    "You are a coding agent working inside a project directory.",
-    "For a task with multiple steps, call update_plan first to lay out the steps, then keep it updated as you finish each one. Skip it for a one-step task.",
-    "Read a file before you edit it; prefer small, targeted edits over full rewrites.",
-    "After changing code, run the relevant check or test.",
-    "Stay inside the workspace. Don't delete or overwrite a file without a clear reason.",
-    "When the task is done, call final_answer with `success` and a short `summary` — don't just reply in prose.",
-  ].join("\n");
+// Standing orders live in prompts/system.md — editable without touching code, read once at startup.
+// Fixed block first, environment last: an identical prefix is what lets the provider cache it across
+// turns, and the cache match stops at the first byte that differs.
+const SYSTEM_RULES = readFileSync(new URL("./prompts/system.md", import.meta.url), "utf8").trim();
 
+function buildSystemPrompt(): string {
   const env = [
     `Working directory: ${process.cwd()}`,
     `Platform: ${process.platform}`,
     `Date: ${new Date().toISOString().slice(0, 10)}`, // date, not time — a clock would bust the cache
   ].join("\n");
 
-  return `${rules}\n\n## Environment\n${env}`;
+  return `${SYSTEM_RULES}\n\n## Environment\n${env}`;
 }
 
-export async function run(goal: string): Promise<RunResult> {
+export async function run(goal: string, ui: UI): Promise<RunResult> {
   // Built once, never touched during the run, so the head stays byte-identical = cacheable.
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt() },
@@ -39,7 +35,9 @@ export async function run(goal: string): Promise<RunResult> {
   const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    ui.thinking(true);
     const res = await chat(messages, toolSchemas);
+    ui.thinking(false);
     const choice = res.choices?.[0];
     if (!choice) throw new Error("model returned no choices");
     const msg = choice.message;
@@ -47,7 +45,7 @@ export async function run(goal: string): Promise<RunResult> {
 
     // Output hit the token cap mid-reply — don't treat a cut-off answer as a finished one.
     if (choice.finish_reason === "length") {
-      console.warn("  ! model output truncated (hit max output tokens)");
+      ui.warn("model output truncated (hit max output tokens)");
     }
 
     // Model stopped without calling final_answer — best-effort wrap of its prose so the caller still
@@ -87,19 +85,20 @@ export async function run(goal: string): Promise<RunResult> {
         }
       }
 
+      ui.thinking(true, call.function.name);
       const result = await dispatch(call.function.name, call.function.arguments);
+      ui.thinking(false);
       messages.push({ role: "tool", tool_call_id: call.id, content: result });
-      const preview = result.slice(0, 100).replace(/\s+/g, " ");
-      console.log(`  · ${call.function.name}(${call.function.arguments}) -> ${preview}`);
+      ui.tool(call.function.name, call.function.arguments, result);
     }
 
     // Watch context size. Real usage is ground truth; our estimate decides when to act later.
     const used = countMessages(messages);
     const actual = res.usage?.prompt_tokens;
-    console.log(`  ~ context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${INPUT_BUDGET} budget`);
+    ui.debug(`context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${INPUT_BUDGET} budget`);
     if (overBudget(messages)) {
       const dropped = compact(messages);
-      console.warn(`  ! over budget — trimmed ${dropped} old messages from the middle`);
+      ui.warn(`over budget — trimmed ${dropped} old messages from the middle`);
     }
   }
 

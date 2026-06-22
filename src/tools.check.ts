@@ -58,6 +58,13 @@ assert.match(await dispatch("read_file", JSON.stringify({ path: bigf })), /over 
 assert.match(await dispatch("edit_file", JSON.stringify({ path: bigf, old_string: "x", new_string: "y" })), /over the 5MB read limit/);
 await fs.rm(bigf);
 
+// binary guard: a file with NUL bytes is refused as text (points at run_bash), so decoded garbage
+// can't pollute the context. NUL built via fromCharCode to keep this source file NUL-free.
+const binf = ".agent-check-bin.tmp";
+await fs.writeFile(binf, "PNG" + String.fromCharCode(0) + "\x89data");
+assert.match(await dispatch("read_file", JSON.stringify({ path: binf })), /looks binary/);
+await fs.rm(binf);
+
 // run_bash returns stdout + exit code
 assert.match(await dispatch("run_bash", JSON.stringify({ command: "echo hi" })), /exit 0\nhi/);
 

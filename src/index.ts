@@ -1,17 +1,39 @@
-// Entry point: run a goal through the agent. Pass it on the command line.
+// CLI shell. With a goal on the command line: run it once and exit with a real code (scriptable).
+// With no args: an interactive chat loop — type a goal, watch it work, type the next one.
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { run } from "./agent";
+import { createUI, banner, resultLine, c } from "./ui";
 
-const goal =
-  process.argv.slice(2).join(" ") ||
-  "List the files here, read package.json, and tell me the project name.";
+const ui = createUI();
 
-console.log(`> ${goal}\n`);
-try {
-  const result = await run(goal);
-  console.log(`\n${result.success ? "✓" : "✗"} ${result.summary}`);
-  process.exit(result.success ? 0 : 1); // structured result → a real exit code a script can read
-} catch (e: any) {
-  // Retries are exhausted by here — give the user one clean line, not a stack trace.
-  console.error(`\nagent failed: ${e.message ?? e}`);
-  process.exit(1);
+async function once(goal: string): Promise<boolean> {
+  try {
+    const r = await run(goal, ui);
+    resultLine(r.success, r.summary);
+    return r.success;
+  } catch (e: any) {
+    ui.thinking(false); // kill the spinner before printing — retries are already exhausted in run()
+    resultLine(false, `agent failed: ${e.message ?? e}`);
+    return false;
+  }
 }
+
+const goal = process.argv.slice(2).join(" ").trim();
+
+if (goal) {
+  process.exit((await once(goal)) ? 0 : 1); // one-shot: structured result → a real exit code
+}
+
+// No goal → interactive chat. Top-level await keeps this flat; readline owns the prompt.
+banner();
+const rl = createInterface({ input, output });
+rl.on("SIGINT", () => process.exit(0)); // Ctrl-C exits; ui's exit handler restores the cursor
+
+while (true) {
+  const line = (await rl.question(c.cyan("\n› "))).trim();
+  if (!line) continue;
+  if (line === "exit" || line === "quit") break;
+  await once(line);
+}
+rl.close();
