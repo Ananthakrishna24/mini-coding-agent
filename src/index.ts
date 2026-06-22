@@ -4,7 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { run } from "./agent";
 import { MODEL } from "./llm";
-import { createUI, banner, resultLine, c } from "./ui";
+import { createUI, banner, resultLine, echoUser, c } from "./ui";
 
 const ui = createUI();
 
@@ -33,9 +33,15 @@ const rl = createInterface({ input, output });
 rl.on("SIGINT", () => process.exit(0)); // Ctrl-C exits; ui's exit handler restores the cursor
 
 while (true) {
-  const line = (await rl.question(c.cyan("\n› "))).trim();
+  let line: string;
+  try {
+    line = (await rl.question(c.cyan("› "))).trim();
+  } catch {
+    break; // readline closed (Ctrl-D / EOF) — leave the loop instead of crashing on the next question
+  }
   if (!line) continue;
   if (line === "exit" || line === "quit") break;
+  echoUser(line); // lock the message in as a styled chat line before the run starts
   await once(line);
 }
 rl.close();

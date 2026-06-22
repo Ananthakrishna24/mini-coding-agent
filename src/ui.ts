@@ -22,6 +22,29 @@ export const c = {
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
+const termWidth = () => process.stdout.columns || 80;
+
+// Visible width ignoring ANSI color codes, and a word-wrapper that respects it — long output folds
+// at the window edge instead of running off it. ponytail: soft-wraps on spaces; a single token wider
+// than the window (a long URL or path) still overflows — fine for the prose this wraps.
+const ANSI = /\x1b\[[0-9;]*m/g;
+const visibleLen = (s: string) => s.replace(ANSI, "").length;
+function wrap(s: string, width: number): string[] {
+  if (width < 8 || visibleLen(s) <= width) return [s];
+  const out: string[] = [];
+  let cur = "";
+  for (const word of s.split(/(\s+)/)) {
+    if (cur && visibleLen(cur) + visibleLen(word) > width) {
+      out.push(cur.replace(/\s+$/, ""));
+      cur = word.replace(/^\s+/, "");
+    } else {
+      cur += word;
+    }
+  }
+  out.push(cur.replace(/\s+$/, ""));
+  return out;
+}
+
 // How the Markdown renderer paints spans — bold, italic, dim, cyan headings, yellow inline code.
 const md: Palette = {
   bold: c.bold,
@@ -54,7 +77,7 @@ function block(rows: string[]): void {
 }
 
 const MAX_ROWS = 16;
-const WIDTH = 72;
+const rowWidth = () => termWidth() - 8; // diff/write content width, leaving room for the gutter
 
 // Red/green +/- diff of an edit, the way a real diff viewer shows it, capped so a huge edit can't
 // flood the log. Counts go in a trailing summary line.
@@ -63,7 +86,7 @@ function diffBlock(oldStr: string, newStr: string): void {
   const adds = d.filter((l) => l.tag === "+").length;
   const dels = d.filter((l) => l.tag === "-").length;
   const rows = d.slice(0, MAX_ROWS).map((l) => {
-    const t = clip(l.text, WIDTH);
+    const t = clip(l.text, rowWidth());
     if (l.tag === "+") return c.green(`+ ${t}`);
     if (l.tag === "-") return c.red(`- ${t}`);
     return c.dim(`  ${t}`);
@@ -76,8 +99,20 @@ function diffBlock(oldStr: string, newStr: string): void {
 // A whole-file write shows its content as additions (we don't have the prior content here to diff).
 function writeBlock(content: string): void {
   const lines = content.split("\n");
-  const rows = lines.slice(0, MAX_ROWS).map((l) => c.green(`+ ${clip(l, WIDTH)}`));
+  const rows = lines.slice(0, MAX_ROWS).map((l) => c.green(`+ ${clip(l, rowWidth())}`));
   if (lines.length > MAX_ROWS) rows.push(c.dim(`… +${lines.length - MAX_ROWS} more lines`));
+  block(rows);
+}
+
+// A plan/todo list → a checklist with status icons, the way a task tracker shows it. update_plan
+// returns lines like "[x] step"; map each marker to an icon + color.
+function planBlock(result: string): void {
+  const rows = result.split("\n").map((l) => {
+    if (l.startsWith("[x]")) return c.green(`✔ ${l.slice(4)}`);
+    if (l.startsWith("[~]")) return c.cyan(`▶ ${l.slice(4)}`);
+    if (l.startsWith("[ ]")) return c.dim(`☐ ${l.slice(4)}`);
+    return l;
+  });
   block(rows);
 }
 
@@ -128,12 +163,13 @@ export function createUI(): UI {
     const dot = failed ? c.red("⏺") : c.cyan("⏺");
     console.log(`  ${dot} ${c.bold(VERB[name] ?? name)}${c.dim(`(${displayArg(name, args)})`)}`);
 
-    if (failed) return block([c.red(clip(oneLine(result), 80))]);
+    if (failed) return block([c.red(clip(oneLine(result), termWidth() - 6))]);
+    if (name === "update_plan") return planBlock(result);
     if (name === "edit_file" && typeof args.old_string === "string" && typeof args.new_string === "string") {
       return diffBlock(args.old_string, args.new_string);
     }
     if (name === "write_file" && typeof args.content === "string") return writeBlock(args.content);
-    block([c.dim(clip(oneLine(result), 80))]);
+    block([c.dim(clip(oneLine(result), termWidth() - 6))]);
   }
 
   const warn = (m: string) => console.log(c.yellow(`  ! ${m}`));
@@ -175,11 +211,28 @@ export function resultLine(success: boolean, summary: string, ms?: number) {
   const took = ms !== undefined ? c.dim(`(${(ms / 1000).toFixed(1)}s)`) : "";
   const mark = success ? c.green("✓") : c.red("✗");
   const body = renderMarkdown(summary.trim(), md).split("\n");
-  // Short answer stays on the mark line; a multi-line Markdown body drops below it, indented.
-  if (body.length <= 1) {
-    console.log(`\n  ${mark} ${body[0] ?? ""}  ${took}`);
+  const width = termWidth() - 2;
+  // A short one-liner stays on the mark line; anything longer or multi-line drops below it, wrapped.
+  if (body.length === 1 && visibleLen(body[0]) <= width - 6) {
+    console.log(`\n  ${mark} ${body[0]}  ${took}`);
     return;
   }
   console.log(`\n  ${mark} ${took}`);
-  for (const line of body) console.log(line ? `  ${line}` : "");
+  for (const line of body) {
+    if (!line) {
+      console.log();
+      continue;
+    }
+    for (const w of wrap(line, width)) console.log(`  ${w}`);
+  }
+}
+
+// Print the user's message as a clean chat line. Replaces readline's raw echo (one row up) with a
+// styled, word-wrapped version, so it persists as a chat line and the spinner can't overwrite it.
+// ponytail: assumes the echo took one screen row; a very long wrapped input may leave a fragment of
+// the raw echo above — cosmetic and rare.
+export function echoUser(text: string) {
+  if (process.stdout.isTTY) process.stdout.write("\x1b[1A\x1b[2K\r");
+  console.log();
+  for (const line of wrap(`${c.cyan("›")} ${c.bold(text)}`, termWidth() - 2)) console.log(line);
 }
