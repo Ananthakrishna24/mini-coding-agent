@@ -13,6 +13,7 @@ const REPEAT_LIMIT = 3; // 3rd identical tool call (same name + args) = stuck; r
 function buildSystemPrompt(): string {
   const rules = [
     "You are a coding agent working inside a project directory.",
+    "For a task with multiple steps, call update_plan first to lay out the steps, then keep it updated as you finish each one. Skip it for a one-step task.",
     "Read a file before you edit it; prefer small, targeted edits over full rewrites.",
     "After changing code, run the relevant check or test.",
     "Stay inside the workspace. Don't delete or overwrite a file without a clear reason.",

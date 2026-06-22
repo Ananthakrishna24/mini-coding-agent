@@ -76,4 +76,39 @@ assert.throws(() => parseFinalAnswer(JSON.stringify({ success: true })), /summar
 assert.throws(() => parseFinalAnswer(JSON.stringify({ success: true, summary: "  " })), /non-empty/, "blank summary rejected");
 assert.throws(() => parseFinalAnswer('{"success":true,"summa'), /valid JSON/, "truncated args rejected, not crashed on");
 
+// update_plan: validate the list at the boundary, render a checkbox list back. Tested through
+// dispatch (offline) — a good list renders; bad statuses, blank steps, and >1 in_progress are
+// rejected as results, not throws.
+const plan = JSON.stringify({
+  plan: [
+    { step: "Add config option", status: "completed" },
+    { step: "Wire through loader", status: "in_progress" },
+    { step: "Update docs", status: "pending" },
+  ],
+});
+assert.equal(
+  await dispatch("update_plan", plan),
+  "[x] Add config option\n[~] Wire through loader\n[ ] Update docs",
+  "renders status marks in order",
+);
+assert.match(await dispatch("update_plan", JSON.stringify({ plan: [] })), /non-empty array/, "empty plan rejected");
+assert.match(
+  await dispatch("update_plan", JSON.stringify({ plan: [{ step: "x", status: "done" }] })),
+  /invalid status/,
+  "bad status value rejected",
+);
+assert.match(
+  await dispatch("update_plan", JSON.stringify({ plan: [{ step: "  ", status: "pending" }] })),
+  /non-empty 'step'/,
+  "blank step text rejected",
+);
+assert.match(
+  await dispatch("update_plan", JSON.stringify({ plan: [
+    { step: "a", status: "in_progress" },
+    { step: "b", status: "in_progress" },
+  ] })),
+  /one step may be 'in_progress'/,
+  "two in_progress steps rejected",
+);
+
 console.log("ok — tools self-check passed");

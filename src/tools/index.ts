@@ -8,9 +8,10 @@ import { read_file } from "./read_file";
 import { write_file } from "./write_file";
 import { edit_file } from "./edit_file";
 import { run_bash } from "./run_bash";
+import { update_plan } from "./update_plan";
 import { finalAnswerSchema } from "./final_answer";
 
-const registry: Record<string, Tool> = { read_file, write_file, edit_file, run_bash };
+const registry: Record<string, Tool> = { read_file, write_file, edit_file, run_bash, update_plan };
 
 // Schemas to hand the model. final_answer is a terminal signal, not a dispatch tool (the agent loop
 // intercepts it), so it's appended here for the model to see rather than living in the registry.
