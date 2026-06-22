@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
 import { chat, getContextWindow } from "./llm";
-import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools";
+import { schemasFor, dispatch, parseFinalAnswer, canSpawn, MAX_DEPTH, SUBAGENT_TOOLS, parseSpawnArgs, formatSubResult, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, inputBudget } from "./context";
 import { loadMemory } from "./memory";
 import { thinkingVerb, toolVerb } from "./format";
@@ -42,20 +42,25 @@ function buildSystemPrompt(): string {
   return `${SYSTEM_RULES}\n\n## Environment\n${env}${memory ? `\n\n${memory}` : ""}`;
 }
 
-export async function run(goal: string, ui: UI): Promise<RunResult> {
+// `depth` is the delegation level: 0 = the top agent, ≥1 = a subagent spawned by spawn_agent. It scopes
+// the toolset (a subagent gets read-only tools and can't delegate again) and is incremented on each
+// spawn so recursion is bounded. Callers run normally by omitting it.
+export async function run(goal: string, ui: UI, depth = 0): Promise<RunResult> {
   // Built once, never touched during the run, so the head stays byte-identical = cacheable.
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt() },
     { role: "user", content: goal },
   ];
 
+  const schemas = schemasFor(depth); // depth scopes what this run may call (a subagent is read-only)
+  const allow = depth > 0 ? SUBAGENT_TOOLS : undefined; // enforced again at dispatch, not just by omission
   const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
   let stall = 0; // consecutive turns with no real progress; trips STALL_LIMIT before MAX_TURNS
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     ui.thinking(true, thinkingVerb());
     const t0 = Date.now();
-    const res = await chat(messages, toolSchemas);
+    const res = await chat(messages, schemas);
     ui.thinking(false);
     const choice = res.choices?.[0];
     if (!choice) throw new Error("model returned no choices");
@@ -112,8 +117,43 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
         }
       }
 
+      // Delegation. Like final_answer this is intercepted, not dispatched: running it recurses into
+      // run() with the live UI and depth — which only exist here. The subagent works in its own message
+      // array (clean context) and only its summary crosses back, so the parent's history stays small.
+      if (call.function.name === "spawn_agent") {
+        if (!canSpawn(depth)) {
+          // Defence-in-depth: a subagent isn't even shown this schema, so this only fires on a
+          // hallucinated call. Refuse as a result the model can recover from — never recurse past the floor.
+          const blocked = `error: blocked: subagent depth limit (${MAX_DEPTH}) reached — do this part yourself`;
+          messages.push({ role: "tool", tool_call_id: call.id, content: blocked });
+          ui.tool(call.function.name, call.function.arguments, blocked);
+          continue;
+        }
+        let subGoal: string;
+        try {
+          subGoal = parseSpawnArgs(call.function.arguments).goal;
+        } catch (e: any) {
+          messages.push({ role: "tool", tool_call_id: call.id, content: `error: ${e.message}` });
+          continue;
+        }
+        ui.subagent(subGoal);
+        // Its own context; only the summary returns. A subagent that throws (e.g. the model call fails
+        // after retries) comes back as a failure result, never as an exception that kills the parent run.
+        let sub: RunResult;
+        try {
+          sub = await run(subGoal, ui, depth + 1);
+        } catch (e: any) {
+          sub = { success: false, summary: `subagent crashed: ${e.message ?? e}` };
+        }
+        const out = formatSubResult(sub);
+        messages.push({ role: "tool", tool_call_id: call.id, content: out });
+        ui.tool(call.function.name, call.function.arguments, out);
+        progressed = true; // a completed delegation is real work — don't count it toward the stall guard
+        continue;
+      }
+
       ui.thinking(true, toolVerb(call.function.name));
-      const result = await dispatch(call.function.name, call.function.arguments);
+      const result = await dispatch(call.function.name, call.function.arguments, allow);
       ui.thinking(false);
       messages.push({ role: "tool", tool_call_id: call.id, content: result });
       ui.tool(call.function.name, call.function.arguments, result);

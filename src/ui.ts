@@ -15,6 +15,7 @@ const useColor = process.stdout.isTTY === true && !process.env.NO_COLOR;
 export type UI = {
   thinking: (on: boolean, label?: string) => void;
   thought: (seconds: number) => void; // "thought for Ns" — only emitted when the model returned reasoning
+  subagent: (goal: string) => void; // announce a delegation before the child run begins (it can take a while)
   tool: (name: string, args: string, result: string) => void;
   warn: (msg: string) => void;
   debug: (msg: string) => void;
@@ -85,6 +86,7 @@ export function createUI(): UI {
   }
 
   const thought = (seconds: number) => console.log(c.dim(`  ✦ thought for ${seconds}s`));
+  const subagent = (goal: string) => console.log(`\n  ${c.primary("⤷")} ${c.dim("delegating to subagent:")} ${goal}`);
 
   function tool(name: string, argsJson: string, result: string) {
     const { header, rows } = toolEntry(name, argsJson, result);
@@ -116,7 +118,7 @@ export function createUI(): UI {
   };
   const usage = () => {}; // session usage tracking is an interactive (Ink) feature; no-op when scripted
 
-  return { thinking, thought, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
+  return { thinking, thought, subagent, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
 }
 
 // On any exit reset the scroll region (so a Ctrl-C mid-run never leaves the terminal with a stuck
