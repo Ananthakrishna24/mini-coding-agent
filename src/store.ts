@@ -6,7 +6,7 @@ import { getModel, setModel, modelInfo, searchModels, getContextWindow, type Mod
 import { inputBudget } from "./context";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
-import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS, paintHex } from "./format";
+import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS } from "./format";
 
 // One scrollback entry. Tool calls, warnings, the user's lines, slash-command output, and run results
 // all land here and render in Ink's <Static> region so they persist as the log scrolls.
@@ -33,6 +33,7 @@ export type State = {
   ctxBudget: number;
   session: { prompt: number; completion: number; cost: number; turns: number }; // cumulative, for /usage
   picker: Picker | null;
+  colorPicker: { sel: number } | null; // the /colors overlay: ↑↓ to move, ⏎ to apply, esc to cancel
   gen: number; // bumped on /clear so <Static> remounts and reprints from scratch (see app.tsx)
 };
 
@@ -49,6 +50,7 @@ let state: State = {
   ctxBudget: 0,
   session: { prompt: 0, completion: 0, cost: 0, turns: 0 },
   picker: null,
+  colorPicker: null,
   gen: 0,
 };
 
@@ -202,6 +204,31 @@ export async function pickerSelect() {
   if (chosen) await activate(chosen.id);
 }
 
+// --- the /colors picker (interactive list, same keys as /model) ---
+
+// Opens on the currently active preset so re-opening lands where you left off.
+export function openColorPicker() {
+  const idx = COLOR_PRESETS.findIndex((p) => p.hex === getPrimaryColor());
+  set({ colorPicker: { sel: idx >= 0 ? idx : 0 } });
+}
+export const closeColorPicker = () => set({ colorPicker: null });
+export function colorPickerMove(delta: number) {
+  const cp = state.colorPicker;
+  if (!cp) return;
+  const n = COLOR_PRESETS.length;
+  set({ colorPicker: { sel: (cp.sel + delta + n) % n } });
+}
+export async function colorPickerSelect() {
+  const cp = state.colorPicker;
+  if (!cp) return;
+  const chosen = COLOR_PRESETS[cp.sel];
+  closeColorPicker();
+  if (chosen) {
+    setPrimaryColor(chosen.hex);
+    push({ kind: "info", lines: [c.green(`✔ color → ${chosen.hex}`)] });
+  }
+}
+
 // Returns true if the input was a command (so the caller doesn't run it as a goal). onExit fires for
 // /exit so the component can tear Ink down.
 export async function submit(input: string, onExit: () => void): Promise<void> {
@@ -222,18 +249,9 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
       if (arg.includes("/")) return activate(arg);
       return openModelPicker(arg);
     case "/colors": {
-      // No arg → list presets (each swatched in its own color) + the current pick. An arg is a preset
-      // name or #rrggbb; setPrimaryColor resolves + persists it, returning null on a bad input.
-      if (!arg) {
-        const cur = getPrimaryColor();
-        const lines = [c.bold("colors"), `  current  ${paintHex(cur, "●")} ${c.dim(cur)}`, ""];
-        for (const p of COLOR_PRESETS) {
-          const mark = p.hex === cur ? "●" : "○";
-          lines.push(`  ${paintHex(p.hex, `${mark} ${p.name.padEnd(9)}`)} ${c.dim(p.hex)}`);
-        }
-        lines.push("", c.dim("  /colors <name>    pick a preset"), c.dim("  /colors #rrggbb   custom hex"));
-        return push({ kind: "info", lines });
-      }
+      // No arg → open the interactive picker (↑↓ to move, ⏎ to apply, esc to cancel). An arg is a
+      // preset name or #rrggbb applied directly — a shortcut past the picker.
+      if (!arg) return openColorPicker();
       const hex = setPrimaryColor(arg);
       if (!hex) return push({ kind: "info", lines: [c.yellow(`unknown color "${arg}" — /colors for the list`)] });
       return push({ kind: "info", lines: [c.green(`✔ color → ${hex}`)] });

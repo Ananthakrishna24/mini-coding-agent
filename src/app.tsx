@@ -3,8 +3,8 @@
 // the plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, type Item, type Picker } from "./store";
-import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor } from "./format";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, type Item, type Picker } from "./store";
+import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex } from "./format";
 
 const indent = (s: string) => `  ${s}`;
 
@@ -124,6 +124,27 @@ function PickerView({ picker }: { picker: Picker }) {
   );
 }
 
+// The /colors picker: each preset swatched in its own color, the active one marked. Same keys as /model.
+function ColorPickerView({ sel }: { sel: number }) {
+  const cur = getPrimaryColor();
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text>{`${c.primary("◉ pick a color")}  ${c.dim("↑↓ choose · ⏎ select · esc cancel")}`}</Text>
+      {COLOR_PRESETS.map((p, i) => {
+        const active = i === sel;
+        const nameStr = p.name.padEnd(8);
+        const marker = active ? c.primary("›") : " ";
+        const dot = paintHex(p.hex, p.hex === cur ? "●" : "○");
+        const name = active ? c.bold(nameStr) : nameStr;
+        return (
+          <Text key={p.hex}>{`  ${marker} ${dot} ${name} ${c.dim(p.hex)}`}</Text>
+        );
+      })}
+      <Text>{c.dim("  custom: /colors #rrggbb")}</Text>
+    </Box>
+  );
+}
+
 function Prompt() {
   const { exit } = useApp();
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -144,6 +165,14 @@ function Prompt() {
       if (key.downArrow) return pickerMove(1);
       if (key.backspace || key.delete) return void pickerFilter(s.picker.query.slice(0, -1));
       if (input && !key.ctrl && !key.meta) return void pickerFilter(s.picker.query + input);
+      return;
+    }
+    // Color picker: arrows to move, enter to apply, esc to cancel (no typing — presets are few).
+    if (s.colorPicker) {
+      if (key.escape) return closeColorPicker();
+      if (key.return) return void colorPickerSelect();
+      if (key.upArrow) return colorPickerMove(-1);
+      if (key.downArrow) return colorPickerMove(1);
       return;
     }
     if (busy) return; // one run at a time — ignore typing while the agent works
@@ -168,6 +197,7 @@ function Prompt() {
   });
 
   if (s.picker) return <PickerView picker={s.picker} />;
+  if (s.colorPicker) return <ColorPickerView sel={s.colorPicker.sel} />;
 
   return (
     <Box flexDirection="column" marginTop={1}>

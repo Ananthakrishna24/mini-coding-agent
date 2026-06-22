@@ -300,7 +300,7 @@ function artRow(line: string): { t: string; s: (x: string) => string } {
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
-  const minion = (x: string) => c.bold(c.yellow(x)); // the brand mark / title wears minion yellow
+  const minion = (x: string) => c.bold(c.primary(x)); // the brand mark / title wears the primary accent
   const art = minionArt.map(artRow);
   const artW = Math.max(...art.map((a) => a.t.length));
 
@@ -331,8 +331,11 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
     return `${left}    ${right}`;
   });
 
-  // Box it, measuring *visible* width so the ANSI colour codes don't throw the right border off.
-  const w = Math.max(...lines.map(visibleLen));
+  // Full-width box: the frame extends end to end (claude-code style), content left-aligned inside.
+  // Measure *visible* width so ANSI colour codes don't throw the right border off. -6 accounts for
+  // the 2-space indent in the Ink UI + the "│ " / " │" borders on each side.
+  const contentW = Math.max(...lines.map(visibleLen));
+  const w = Math.max(contentW, termWidth() - 6);
   const pad = (s: string) => s + " ".repeat(w - visibleLen(s));
   const rule = (l: string, r: string) => c.primary(l + "─".repeat(w + 2) + r);
   return [rule("╭", "╮"), ...lines.map((s) => `${c.primary("│")} ${pad(s)} ${c.primary("│")}`), rule("╰", "╯")];
