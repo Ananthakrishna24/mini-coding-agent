@@ -13,10 +13,50 @@ assert.match(big, /chars omitted/);
 
 const f = ".agent-check.tmp";
 
-// write -> read roundtrip
+// write -> read roundtrip (whole file: no header, byte-identical)
 assert.match(await dispatch("write_file", JSON.stringify({ path: f, content: "hello" })), /wrote 5 bytes/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: f })), "hello");
 await fs.rm(f);
+
+// read_file line window: offset/limit page through a file, with a 1-based "# lines X-Y of Z" header
+const lf = ".agent-check-lines.tmp";
+await dispatch("write_file", JSON.stringify({ path: lf, content: "L1\nL2\nL3\nL4\nL5" }));
+const win = await dispatch("read_file", JSON.stringify({ path: lf, offset: 2, limit: 2 }));
+assert.match(win, /^# lines 2-3 of 5\n/, "window reports its 1-based range and total");
+assert.match(win, /L2\nL3/, "returned exactly the requested lines");
+assert.ok(!win.includes("L1") && !win.includes("L4"), "excluded lines outside the window");
+// offset past EOF is an empty window, not a crash
+assert.match(await dispatch("read_file", JSON.stringify({ path: lf, offset: 99 })), /# lines 99-98 of 5/);
+// bad window values are rejected at the boundary, as results not throws
+assert.match(await dispatch("read_file", JSON.stringify({ path: lf, offset: 0 })), /'offset' must be a positive integer/);
+assert.match(await dispatch("read_file", JSON.stringify({ path: lf, limit: -1 })), /'limit' must be a positive integer/);
+await fs.rm(lf);
+
+// edit_file: surgical replace of a unique block, then read it back
+const ef = ".agent-check-edit.tmp";
+await dispatch("write_file", JSON.stringify({ path: ef, content: "alpha\nbeta\ngamma" }));
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /1 replacement/);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "alpha\nBETA\ngamma");
+// not found / ambiguous / no-op come back as results, never thrown
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "nope", new_string: "x" })), /not found/);
+await dispatch("write_file", JSON.stringify({ path: ef, content: "x x x" }));
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "y" })), /matches 3 places/);
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "x" })), /identical/);
+// replace_all hits every occurrence
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "y", replace_all: true })), /3 replacements/);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "y y y");
+// new_string with a $ pattern is inserted literally, not treated as a backreference
+await dispatch("write_file", JSON.stringify({ path: ef, content: "find_me" }));
+await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "find_me", new_string: "$& and $1" }));
+assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "$& and $1");
+await fs.rm(ef);
+
+// read size guard: a file over the limit is refused (not OOM'd), as a result pointing at run_bash
+const bigf = ".agent-check-big.tmp";
+await fs.writeFile(bigf, "x".repeat(5 * 1024 * 1024 + 1));
+assert.match(await dispatch("read_file", JSON.stringify({ path: bigf })), /over the 5MB read limit/);
+assert.match(await dispatch("edit_file", JSON.stringify({ path: bigf, old_string: "x", new_string: "y" })), /over the 5MB read limit/);
+await fs.rm(bigf);
 
 // run_bash returns stdout + exit code
 assert.match(await dispatch("run_bash", JSON.stringify({ command: "echo hi" })), /exit 0\nhi/);

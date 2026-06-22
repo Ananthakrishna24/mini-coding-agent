@@ -5,7 +5,8 @@ import { chat } from "./llm";
 import { toolSchemas, dispatch } from "./tools";
 import { countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
 
-const MAX_TURNS = 12;
+const MAX_TURNS = 12; // outer backstop for messy loops the signature guard can't catch
+const REPEAT_LIMIT = 3; // 3rd identical tool call (same name + args) = stuck; retrying won't help
 
 // Standing orders. Fixed block first, environment last: an identical prefix is what lets the
 // provider cache it across turns, and the cache match stops at the first byte that differs.
@@ -34,6 +35,8 @@ export async function run(goal: string): Promise<string> {
     { role: "user", content: goal },
   ];
 
+  const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
+
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const res = await chat(messages, toolSchemas);
     const choice = res.choices?.[0];
@@ -49,7 +52,24 @@ export async function run(goal: string): Promise<string> {
     if (!msg.tool_calls?.length) return msg.content ?? "(no output)";
 
     for (const call of msg.tool_calls) {
-      if (call.type !== "function") continue;
+      // Every tool_call must get a matching tool result or the next request is rejected —
+      // even ones we can't run. A skipped call still needs its tombstone.
+      if (call.type !== "function") {
+        messages.push({ role: "tool", tool_call_id: call.id, content: `error: unsupported tool call type '${call.type}'` });
+        continue;
+      }
+
+      // No-progress guard: identical call (name + args) repeated = the model is stuck. Stop cheaply
+      // instead of feeding the loop turns until MAX_TURNS. Still push a result so the history stays valid.
+      const sig = `${call.function.name}(${call.function.arguments})`;
+      const count = (seen.get(sig) ?? 0) + 1;
+      seen.set(sig, count);
+      if (count >= REPEAT_LIMIT) {
+        const stop = `stopped: repeated ${call.function.name} with the same arguments ${count}×`;
+        messages.push({ role: "tool", tool_call_id: call.id, content: stop });
+        return stop;
+      }
+
       const result = await dispatch(call.function.name, call.function.arguments);
       messages.push({ role: "tool", tool_call_id: call.id, content: result });
       const preview = result.slice(0, 100).replace(/\s+/g, " ");
