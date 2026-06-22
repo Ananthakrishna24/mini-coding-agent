@@ -3,7 +3,7 @@
 // environment. The model is switchable at runtime (/model command); the catalog + per-model
 // context/price come from the provider's own API and degrade gracefully when unavailable.
 import OpenAI from "openai";
-import { resolveProvider, PROVIDERS, type Provider } from "./provider";
+import { resolveProvider, PROVIDERS, reasoningParams, openaiReasons, type Provider } from "./provider";
 
 // A provider's key if one is configured right now (env, or a .env that --env-file / onboarding loaded).
 const keyFor = (p: Provider): string | undefined => {
@@ -27,6 +27,12 @@ export const getProvider = () => provider;
 export const getModel = () => model;
 export const getContextWindow = () => contextWindow;
 
+// Reasoning effort (low|medium|high) for the active model, or null = let the model default. Only sent
+// for reasoning-capable models; setModel clears it when switching to one that can't take it.
+let effort: string | null = null;
+export const getEffort = () => effort;
+export const setEffort = (e: string | null) => void (effort = e);
+
 // A client for a provider (OpenAI uses the SDK's default baseURL; OpenRouter overrides it). Only ever
 // called for a provider we have a key for.
 function buildClient(p: Provider): OpenAI {
@@ -49,7 +55,8 @@ export async function chat(
     model,
     messages,
     ...(tools ? { tools, tool_choice: "auto" } : {}),
-  });
+    ...reasoningParams(provider, effort), // reasoning_effort / reasoning.effort, only when an effort is set
+  } as OpenAI.ChatCompletionCreateParamsNonStreaming); // cast: `reasoning` (OpenRouter) isn't in the SDK type
 }
 
 // --- model catalog: context window + price. OpenRouter ships both in its catalog; OpenAI's
@@ -63,6 +70,7 @@ export type ModelInfo = {
   promptPrice: number; // USD per 1M input tokens
   completionPrice: number; // USD per 1M output tokens
   tools: boolean; // supports tool-calling — this is a tool-using agent, so non-tool models are useless here
+  reasoning: boolean; // takes a reasoning-effort knob — the /model flow then asks for the effort level
   provider: Provider; // which provider serves this model — so the client can be pointed at the right API
 };
 
@@ -84,7 +92,7 @@ async function fetchProviderModels(p: Provider): Promise<ModelInfo[]> {
     const res = await buildClient(p).models.list(); // GET /v1/models needs the key
     return res.data
       .filter((m) => isOpenAIChatModel(m.id))
-      .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true, provider: p }));
+      .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true, reasoning: openaiReasons(m.id), provider: p }));
   }
   const res = await fetch(`${conf.baseURL}/models`, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`model catalog fetch failed: ${res.status}`);
@@ -96,6 +104,7 @@ async function fetchProviderModels(p: Provider): Promise<ModelInfo[]> {
     promptPrice: Number(m.pricing?.prompt ?? 0) * 1e6,
     completionPrice: Number(m.pricing?.completion ?? 0) * 1e6,
     tools: Array.isArray(m.supported_parameters) && m.supported_parameters.includes("tools"),
+    reasoning: Array.isArray(m.supported_parameters) && m.supported_parameters.includes("reasoning"),
     provider: p,
   }));
 }
@@ -124,6 +133,7 @@ export async function setModel(id: string): Promise<ModelInfo | undefined> {
     client = buildClient(provider);
   }
   if (info?.context) contextWindow = info.context;
+  if (info && !info.reasoning) effort = null; // a non-reasoning model would reject an effort param
   return info;
 }
 

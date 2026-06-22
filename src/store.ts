@@ -1,8 +1,9 @@
 // The interactive session's state + controller. Holds the chat history and live status, implements
 // the UI interface the agent loop reports through, drives runs, and handles slash commands. Plain TS
 // (no React) so app.tsx can subscribe to it as an external store via useSyncExternalStore.
+import type OpenAI from "openai";
 import { run } from "./agent";
-import { getModel, setModel, modelInfo, searchModels, getContextWindow, resetCatalog, type ModelInfo } from "./llm";
+import { getModel, setModel, modelInfo, searchModels, getContextWindow, getEffort, setEffort, resetCatalog, type ModelInfo } from "./llm";
 import { applyEnvFile } from "./onboarding";
 import { inputBudget } from "./context";
 import type { UI } from "./ui";
@@ -39,9 +40,14 @@ export type State = {
   session: { prompt: number; completion: number; cost: number; turns: number }; // cumulative, for /usage
   picker: Picker | null;
   colorPicker: { sel: number } | null; // the /colors overlay: ↑↓ to move, ⏎ to apply, esc to cancel
+  effortPicker: { sel: number } | null; // the reasoning-effort overlay, opened after picking a reasoning model
   setup: boolean; // the /setup overlay: re-run onboarding (pick provider, add a key) without restarting
   gen: number; // bumped on /clear so <Static> remounts and reprints from scratch (see app.tsx)
 };
+
+// Effort levels offered after a reasoning model is picked. "default" sends no effort param (the model's
+// own default); the rest map straight to the provider's low|medium|high.
+export const EFFORT_LEVELS = ["default", "low", "medium", "high"] as const;
 
 let state: State = {
   items: [],
@@ -57,9 +63,14 @@ let state: State = {
   session: { prompt: 0, completion: 0, cost: 0, turns: 0 },
   picker: null,
   colorPicker: null,
+  effortPicker: null,
   setup: false,
   gen: 0,
 };
+
+// The live message array for this session, threaded through every top-level run so the model sees the
+// whole conversation across turns (subagents get their own clean context). Reset by /clear.
+let conversation: OpenAI.ChatCompletionMessageParam[] = [];
 
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
@@ -130,7 +141,8 @@ export const ui: UI = {
 // Sync the active model into state: catalog entry (for pricing), footer label, and context window.
 async function syncModel() {
   currentInfo = await modelInfo().catch(() => undefined);
-  ui.setModelLabel(describeModel(currentInfo, getModel()));
+  const eff = getEffort();
+  ui.setModelLabel(describeModel(currentInfo, getModel()) + (eff ? ` · ${eff}` : ""));
 }
 
 const bannerItem = (): NewItem => ({
@@ -149,6 +161,7 @@ export async function init() {
 // reprints from scratch (a shrunk items array alone won't, since Static never re-renders past items).
 function freshSession() {
   if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback, cursor home
+  conversation = []; // a cleared screen means a cleared thread — the next run starts the model fresh
   state = { ...state, items: [{ id: nextId++, ...bannerItem() } as Item], gen: state.gen + 1, session: { prompt: 0, completion: 0, cost: 0, turns: 0 } };
   emit();
 }
@@ -171,7 +184,7 @@ async function runGoal(goal: string) {
   ui.startRun();
   const t0 = Date.now();
   try {
-    const r = await run(goal, ui);
+    const r = await run(goal, ui, 0, conversation); // same array every turn = the model keeps the thread
     push({ kind: "result", success: r.success, summary: r.summary, ms: Date.now() - t0 });
   } catch (e: any) {
     push({ kind: "result", success: false, summary: `agent failed: ${e.message ?? e}`, ms: Date.now() - t0 });
@@ -204,6 +217,7 @@ async function activate(id: string) {
   await syncModel();
   refreshBanner();
   push({ kind: "info", lines: [c.green(`✔ model → ${describeModel(info, id)}`)] });
+  if (info?.reasoning) openEffortPicker(); // a reasoning model: ask for the effort level next
 }
 
 // --- the /model picker (interactive list, like claude-code's /model) ---
@@ -263,6 +277,31 @@ export async function colorPickerSelect() {
   }
 }
 
+// --- the reasoning-effort picker (opens after a reasoning model is chosen; same keys as /colors) ---
+
+// Opens on the current effort so re-opening lands where you left off ("default" when none is set).
+export function openEffortPicker() {
+  const cur = getEffort();
+  const idx = cur ? EFFORT_LEVELS.indexOf(cur as (typeof EFFORT_LEVELS)[number]) : 0;
+  set({ effortPicker: { sel: idx >= 0 ? idx : 0 } });
+}
+export const closeEffortPicker = () => set({ effortPicker: null });
+export function effortPickerMove(delta: number) {
+  const ep = state.effortPicker;
+  if (!ep) return;
+  const n = EFFORT_LEVELS.length;
+  set({ effortPicker: { sel: (ep.sel + delta + n) % n } });
+}
+export async function effortPickerSelect() {
+  const ep = state.effortPicker;
+  if (!ep) return;
+  const chosen = EFFORT_LEVELS[ep.sel];
+  closeEffortPicker();
+  setEffort(chosen === "default" ? null : chosen); // "default" = no effort param, the model's own default
+  await syncModel(); // fold the effort into the footer model label
+  push({ kind: "info", lines: [c.green(`✔ effort → ${chosen}`)] });
+}
+
 // --- the /setup overlay: re-run onboarding in place (pick provider, add a key) without restarting ---
 export const openSetup = () => set({ setup: true });
 
@@ -318,6 +357,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
         lines: [
           c.bold("status"),
           `  model    ${describeModel(currentInfo, getModel())}`,
+          `  effort   ${getEffort() ?? c.dim("default")}${currentInfo && !currentInfo.reasoning ? c.dim("  (non-reasoning model)") : ""}`,
           `  window   ${fmtTokens(win)} tokens (budget ${fmtTokens(inputBudget(win))})`,
           `  dir      ${process.cwd().replace(process.env.HOME ?? "~", "~")}`,
         ],

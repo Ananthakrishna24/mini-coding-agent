@@ -57,12 +57,13 @@ if (process.stdin.isTTY) {
   banner(await modelInfo().catch(() => undefined), getModel());
   await setModel(getModel()).catch(() => undefined);
   const rl = createInterface({ input, output });
+  const conversation: import("openai").default.ChatCompletionMessageParam[] = []; // session thread across piped lines
   for await (const raw of rl) {
     const line = raw.trim();
     if (!line || line === "exit" || line === "quit") break;
     const t0 = Date.now();
     try {
-      const r = await run(line, ui);
+      const r = await run(line, ui, 0, conversation);
       ui.endRun();
       resultLine(r.success, r.summary, Date.now() - t0);
     } catch (e: any) {

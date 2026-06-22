@@ -1,6 +1,6 @@
 // Offline self-check for provider resolution + .env merge — no model/network. Run: npm run check
 import assert from "node:assert/strict";
-import { resolveProvider, mergeEnv, PROVIDERS } from "./provider";
+import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons } from "./provider";
 
 // --- resolveProvider ---
 
@@ -91,5 +91,21 @@ assert.equal(mergeEnv("", { OPENAI_API_KEY: "sk-x" }), "OPENAI_API_KEY=sk-x\n", 
 // exactly one trailing newline regardless of input
 assert.equal(mergeEnv("A=1\n\n\n", { B: "2" }).endsWith("2\n"), true, "single trailing newline");
 assert.ok(!mergeEnv("A=1", { B: "2" }).endsWith("\n\n"), "no double trailing newline");
+
+// --- reasoningParams: provider-shaped effort body, or {} when no effort set ---
+
+assert.deepEqual(reasoningParams("openai", null), {}, "no effort → no params");
+assert.deepEqual(reasoningParams("openrouter", null), {}, "no effort → no params (openrouter)");
+assert.deepEqual(reasoningParams("openai", "high"), { reasoning_effort: "high" }, "openai uses top-level reasoning_effort");
+assert.deepEqual(reasoningParams("openrouter", "low"), { reasoning: { effort: "low" } }, "openrouter wraps it in reasoning.effort");
+
+// --- openaiReasons: which OpenAI ids take an effort knob ---
+
+for (const id of ["o1", "o3-mini", "o4", "gpt-5", "gpt-5.5"]) {
+  assert.ok(openaiReasons(id), `${id} is a reasoning model`);
+}
+for (const id of ["gpt-4o", "gpt-4.1", "chatgpt-4o-latest"]) {
+  assert.ok(!openaiReasons(id), `${id} is not a reasoning model`);
+}
 
 console.log("provider.check.ts ok");

@@ -45,12 +45,13 @@ function buildSystemPrompt(): string {
 // `depth` is the delegation level: 0 = the top agent, ≥1 = a subagent spawned by spawn_agent. It scopes
 // the toolset (a subagent gets read-only tools and can't delegate again) and is incremented on each
 // spawn so recursion is bounded. Callers run normally by omitting it.
-export async function run(goal: string, ui: UI, depth = 0): Promise<RunResult> {
-  // Built once, never touched during the run, so the head stays byte-identical = cacheable.
-  const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: buildSystemPrompt() },
-    { role: "user", content: goal },
-  ];
+// `history` is the live message array for an ongoing session: pass the same one across turns and the
+// model sees the whole conversation, not just this turn. Omit it (subagents, one-shots) for a clean
+// context. The system prompt is built once, on the first turn, so the cacheable head stays byte-identical.
+export async function run(goal: string, ui: UI, depth = 0, history?: OpenAI.ChatCompletionMessageParam[]): Promise<RunResult> {
+  const messages: OpenAI.ChatCompletionMessageParam[] = history ?? [];
+  if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
+  messages.push({ role: "user", content: goal });
 
   const schemas = schemasFor(depth); // depth scopes what this run may call (a subagent is read-only)
   const allow = depth > 0 ? SUBAGENT_TOOLS : undefined; // enforced again at dispatch, not just by omission

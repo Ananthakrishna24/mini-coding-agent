@@ -23,6 +23,23 @@ export const PROVIDERS: Record<Provider, { label: string; baseURL: string | null
 
 export type Resolved = { provider: Provider; apiKey: string };
 
+// --- reasoning effort: the low|medium|high knob reasoning models take ---
+
+// The wire shape differs by provider: OpenAI Chat Completions takes a top-level `reasoning_effort`;
+// OpenRouter wraps it as `reasoning: { effort }`. Returns the extra request body to merge into the
+// completion call, or {} when no effort is set (so a non-reasoning model gets a clean request).
+export function reasoningParams(provider: Provider, effort: string | null): Record<string, unknown> {
+  if (!effort) return {};
+  return provider === "openai" ? { reasoning_effort: effort } : { reasoning: { effort } };
+}
+
+// OpenAI's catalog carries no capability flags, so infer reasoning support from the id: the o-series
+// (o1/o3/o4…) and the gpt-5 family reason. OpenRouter reports it directly via supported_parameters,
+// so this is only the OpenAI fallback.
+export function openaiReasons(id: string): boolean {
+  return /^o\d/.test(id) || /^gpt-5/.test(id);
+}
+
 // Decide which provider to use from the environment. Rule:
 //   1. an explicit PROVIDER wins (but only if its key is actually present);
 //   2. otherwise infer from whichever key is set;

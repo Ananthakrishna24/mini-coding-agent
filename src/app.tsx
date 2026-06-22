@@ -3,7 +3,7 @@
 // the plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, finishSetup, type Item, type Picker } from "./store";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
 import { Onboarding } from "./onboarding";
 
@@ -154,6 +154,21 @@ function ColorPickerView({ sel }: { sel: number }) {
   );
 }
 
+// The reasoning-effort picker, shown right after a reasoning model is chosen. Same keys as /colors.
+function EffortPickerView({ sel }: { sel: number }) {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text>{`${c.primary("◉ reasoning effort")}  ${c.dim("↑↓ choose · ⏎ select · esc keep default")}`}</Text>
+      {EFFORT_LEVELS.map((level, i) => {
+        const active = i === sel;
+        const marker = active ? c.primary("›") : " ";
+        const name = active ? c.bold(level) : level;
+        return <Text key={level}>{`  ${marker} ${name}`}</Text>;
+      })}
+    </Box>
+  );
+}
+
 function Prompt() {
   const { exit } = useApp();
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -184,6 +199,14 @@ function Prompt() {
       if (key.downArrow) return colorPickerMove(1);
       return;
     }
+    // Effort picker: arrows to move, enter to apply, esc to keep the default (no typing — few levels).
+    if (s.effortPicker) {
+      if (key.escape) return closeEffortPicker();
+      if (key.return) return void effortPickerSelect();
+      if (key.upArrow) return effortPickerMove(-1);
+      if (key.downArrow) return effortPickerMove(1);
+      return;
+    }
     if (busy) return; // one run at a time — ignore typing while the agent works
     if (key.return) {
       // With the "/" menu open, Enter runs the highlighted command (so "/mo"+⏎ → /model), not the
@@ -207,6 +230,7 @@ function Prompt() {
 
   if (s.picker) return <PickerView picker={s.picker} />;
   if (s.colorPicker) return <ColorPickerView sel={s.colorPicker.sel} />;
+  if (s.effortPicker) return <EffortPickerView sel={s.effortPicker.sel} />;
 
   return (
     <Box flexDirection="column" marginTop={1}>

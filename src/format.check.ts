@@ -10,10 +10,10 @@ assert.equal(toolVerb("totally_unknown"), "totally_unknown");
 
 // describeModel: full catalog entry shows context + price + provider; an OpenAI-style entry (no
 // context/price) skips those fields instead of printing "0 · $0.00/..." but still tags the provider.
-const full: ModelInfo = { id: "deepseek/v4", name: "v4", context: 131000, promptPrice: 0.5, completionPrice: 1.5, tools: true, provider: "openrouter" };
+const full: ModelInfo = { id: "deepseek/v4", name: "v4", context: 131000, promptPrice: 0.5, completionPrice: 1.5, tools: true, reasoning: false, provider: "openrouter" };
 const summ = describeModel(full, full.id);
 assert.ok(summ.includes("131K") && summ.includes("per 1M") && summ.includes("openrouter"), `full summary: ${summ}`);
-const bare: ModelInfo = { id: "gpt-5.5", name: "gpt-5.5", context: 0, promptPrice: 0, completionPrice: 0, tools: true, provider: "openai" };
+const bare: ModelInfo = { id: "gpt-5.5", name: "gpt-5.5", context: 0, promptPrice: 0, completionPrice: 0, tools: true, reasoning: true, provider: "openai" };
 const bareSumm = describeModel(bare, bare.id);
 assert.ok(!bareSumm.includes("per 1M") && !bareSumm.includes("0 ·"), `bare summary should skip empty fields: ${bareSumm}`);
 assert.ok(bareSumm.includes("gpt-5.5") && bareSumm.includes("openai"), `bare summary: ${bareSumm}`);
