@@ -51,12 +51,19 @@ export async function chat(
   messages: OpenAI.ChatCompletionMessageParam[],
   tools?: OpenAI.ChatCompletionTool[],
 ) {
-  return client.chat.completions.create({
-    model,
-    messages,
-    ...(tools ? { tools, tool_choice: "auto" } : {}),
-    ...reasoningParams(provider, effort), // reasoning_effort / reasoning.effort, only when an effort is set
-  } as OpenAI.ChatCompletionCreateParamsNonStreaming); // cast: `reasoning` (OpenRouter) isn't in the SDK type
+  const base = { model, messages, ...(tools ? { tools, tool_choice: "auto" } : {}) };
+  const create = (extra: Record<string, unknown>) =>
+    // cast: `reasoning` (OpenRouter) isn't in the SDK type
+    client.chat.completions.create({ ...base, ...extra } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+  try {
+    return await create(reasoningParams(provider, effort)); // reasoning_effort / reasoning.effort, only when set
+  } catch (e: any) {
+    // gpt-5.5/5.4 reject reasoning_effort alongside function tools on Chat Completions ("use /v1/responses").
+    // Retry once without the effort knob so the call still lands — models that accept it (o-series, gpt-5.1)
+    // never hit this path. ponytail: degrade the knob, not the request; the full fix is the Responses API.
+    if (effort && e?.status === 400 && /reasoning_effort/i.test(String(e?.message))) return await create({});
+    throw e;
+  }
 }
 
 // --- model catalog: context window + price. OpenRouter ships both in its catalog; OpenAI's
