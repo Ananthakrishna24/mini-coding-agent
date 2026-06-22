@@ -4,6 +4,7 @@
 import { styleText } from "node:util";
 import { homedir } from "node:os";
 import { diffLines } from "./diff";
+import { renderMarkdown, type Palette } from "./md";
 
 const useColor = process.stdout.isTTY === true && !process.env.NO_COLOR;
 type Style = Parameters<typeof styleText>[0];
@@ -20,6 +21,15 @@ export const c = {
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+// How the Markdown renderer paints spans — bold, italic, dim, cyan headings, yellow inline code.
+const md: Palette = {
+  bold: c.bold,
+  italic: (s) => paint("italic", s),
+  dim: c.dim,
+  heading: (s) => paint(["bold", "cyan"], s),
+  code: (s) => paint("yellow", s),
+};
 
 // A friendlier name + the one argument worth showing, so the log reads "Update(src/foo.ts)" rather
 // than dumping raw JSON. Unknown tools fall back to their real name and stringified args.
@@ -162,6 +172,14 @@ export function banner(model: string) {
 }
 
 export function resultLine(success: boolean, summary: string, ms?: number) {
-  const took = ms !== undefined ? c.dim(`  (${(ms / 1000).toFixed(1)}s)`) : "";
-  console.log(`\n  ${success ? c.green("✓") : c.red("✗")} ${summary}${took}`);
+  const took = ms !== undefined ? c.dim(`(${(ms / 1000).toFixed(1)}s)`) : "";
+  const mark = success ? c.green("✓") : c.red("✗");
+  const body = renderMarkdown(summary.trim(), md).split("\n");
+  // Short answer stays on the mark line; a multi-line Markdown body drops below it, indented.
+  if (body.length <= 1) {
+    console.log(`\n  ${mark} ${body[0] ?? ""}  ${took}`);
+    return;
+  }
+  console.log(`\n  ${mark} ${took}`);
+  for (const line of body) console.log(line ? `  ${line}` : "");
 }
