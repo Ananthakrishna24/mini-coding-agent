@@ -3,12 +3,16 @@
 // and the Ink UI (app.tsx, interactive) render identically. Color is util.styleText (Node ≥20),
 // gated on a TTY so piped/CI/NO_COLOR output stays plain and grep-able.
 import { styleText } from "node:util";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { diffLines } from "./diff";
 import { renderMarkdown, type Palette } from "./md";
 import type { ModelInfo } from "./llm";
 
 const useColor = process.stdout.isTTY === true && !process.env.NO_COLOR;
 type Style = Parameters<typeof styleText>[0];
+type Color = Extract<Style, string>; // a single styleText color name (Style also allows an array of them)
 const paint = (style: Style, s: string) => (useColor ? styleText(style, s) : s);
 
 export const c = {
@@ -75,6 +79,39 @@ function displayArg(name: string, args: any): string {
   return clip(oneLine(JSON.stringify(args ?? {})), 56);
 }
 
+// Tool badge: an uppercase, background-filled chip ("READ" on color) — claude-code style, so the log
+// scans by colored shape. Per-tool hue; failures go red, unknown tools fall back to gray. Black text on
+// a bright fill reads on any terminal theme.
+const BADGE_BG: Record<string, Color> = {
+  read_file: "bgBlueBright",
+  write_file: "bgGreenBright",
+  edit_file: "bgGreenBright",
+  run_bash: "bgYellowBright",
+  update_plan: "bgMagentaBright",
+};
+const badge = (name: string, failed: boolean) => {
+  const style: Color[] = [failed ? "bgRedBright" : BADGE_BG[name] ?? "bgGray", "black", "bold"];
+  return paint(style, ` ${(VERB[name] ?? name).toUpperCase()} `);
+};
+
+// Live-spinner words. The model phase gets a random gerund each turn so a wait reads like real work,
+// not a frozen "thinking…"; tool calls get a present-tense action ("Reading…") instead of the raw name.
+const THINKING_VERBS = [
+  "Cogitating", "Pondering", "Ruminating", "Musing", "Noodling", "Conjuring",
+  "Percolating", "Brewing", "Simmering", "Tinkering", "Wrangling", "Finagling",
+  "Scheming", "Plotting", "Computing", "Synthesizing", "Deliberating", "Contemplating",
+];
+export const thinkingVerb = () => THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
+
+const TOOL_GERUND: Record<string, string> = {
+  read_file: "Reading",
+  write_file: "Writing",
+  edit_file: "Editing",
+  run_bash: "Running",
+  update_plan: "Planning",
+};
+export const toolVerb = (name: string) => TOOL_GERUND[name] ?? name;
+
 const MAX_ROWS = 16;
 const rowWidth = () => termWidth() - 8; // diff/write content width, leaving room for the gutter
 
@@ -117,7 +154,7 @@ function previewRows(result: string, paintRow: (s: string) => string, name?: str
   if (name === "read_file") {
     const m = result.match(/^# lines \d+-(\d+) of (\d+)/);
     const total = m ? Number(m[2]) : result.replace(/\n+$/, "").split("\n").length;
-    return [paintRow(`Read ${total} line${total === 1 ? "" : "s"}`)];
+    return [paintRow(`${total} line${total === 1 ? "" : "s"}`)]; // verb lives in the badge now
   }
   const src = result.replace(/\n+$/, "").split("\n");
   const rows: string[] = [];
@@ -133,8 +170,8 @@ function previewRows(result: string, paintRow: (s: string) => string, name?: str
   return rows;
 }
 
-// One tool entry, fully formatted: the ⏺ Verb(arg) header and the body rows (diff / write / preview).
-// Shared by the console log and the Ink history so an entry looks the same in both.
+// One tool entry, fully formatted: a " READ " badge + arg header and the body rows (diff / write /
+// preview). Shared by the console log and the Ink history so an entry looks the same in both.
 export type ToolEntry = { failed: boolean; header: string; rows: string[] };
 export function toolEntry(name: string, argsJson: string, result: string): ToolEntry {
   let args: any = {};
@@ -144,8 +181,7 @@ export function toolEntry(name: string, argsJson: string, result: string): ToolE
     /* keep {}; the header still renders */
   }
   const failed = result.startsWith("error:") || /^exit [1-9]/.test(result);
-  const dot = failed ? c.red("⏺") : c.cyan("⏺");
-  const header = `${dot} ${c.bold(VERB[name] ?? name)}${c.dim(`(${displayArg(name, args)})`)}`;
+  let header = `${badge(name, failed)} ${c.dim(displayArg(name, args))}`;
 
   let rows: string[];
   if (failed) rows = previewRows(result, c.red);
@@ -154,6 +190,13 @@ export function toolEntry(name: string, argsJson: string, result: string): ToolE
     rows = diffRows(args.old_string, args.new_string);
   else if (name === "write_file" && typeof args.content === "string") rows = writeRows(args.content);
   else rows = previewRows(result, c.dim, name);
+
+  // A single-line body rides on the header (" READ  src/format.ts  15 lines"); multi-line bodies
+  // (diffs, writes, long output) still drop into the ⎿ block below.
+  if (rows.length === 1) {
+    header = `${header}  ${rows[0]}`;
+    rows = [];
+  }
 
   return { failed, header, rows };
 }
@@ -171,18 +214,24 @@ export function resultBody(summary: string): string[] {
   return renderMarkdown(summary.trim(), md).split("\n");
 }
 
+// The minion mascot, loaded from ascii-art.txt at the project root (edit that file to change it). Kept
+// small by hand — a banner mascot wants a few crisp rows; a detailed photo decimated to this size just
+// turns to noise. A missing/unreadable file falls back to a one-liner so a deleted asset can't crash startup.
+const minionArt = ((): string[] => {
+  try {
+    return readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "ascii-art.txt"), "utf8").replace(/\n+$/, "").split("\n");
+  } catch {
+    return ["(•◡•)"];
+  }
+})();
+
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
   const minion = (x: string) => c.bold(c.yellow(x)); // minions are yellow — the brand mark wears it
   const rows: { t: string; s?: (x: string) => string }[] = [
-    // a goggled minion: capsule body, two goggle eyes joined by a strap, a smile, and two little feet.
-    { t: "╭─────────╮", s: minion },
-    { t: "│ ◉  ─  ◉ │  minion code", s: minion },
-    { t: "│         │", s: minion },
-    { t: "│  ╲___╱  │", s: minion },
-    { t: "╰──┬───┬──╯", s: minion },
-    { t: "   ╹   ╹", s: minion },
+    ...minionArt.map((t) => ({ t, s: minion })),
+    { t: "minion code", s: minion },
     { t: "" },
     { t: `model    ${info?.id ?? id}` },
     ...(info

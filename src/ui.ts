@@ -14,6 +14,7 @@ const useColor = process.stdout.isTTY === true && !process.env.NO_COLOR;
 // required by run() so a run is never silently chatty via console.* — all output goes through one place.
 export type UI = {
   thinking: (on: boolean, label?: string) => void;
+  thought: (seconds: number) => void; // "thought for Ns" — only emitted when the model returned reasoning
   tool: (name: string, args: string, result: string) => void;
   warn: (msg: string) => void;
   debug: (msg: string) => void;
@@ -83,6 +84,8 @@ export function createUI(): UI {
     }
   }
 
+  const thought = (seconds: number) => console.log(c.dim(`  ✦ thought for ${seconds}s`));
+
   function tool(name: string, argsJson: string, result: string) {
     const { header, rows } = toolEntry(name, argsJson, result);
     console.log(); // a blank line before each entry — breathing room between tool calls
@@ -113,7 +116,7 @@ export function createUI(): UI {
   };
   const usage = () => {}; // session usage tracking is an interactive (Ink) feature; no-op when scripted
 
-  return { thinking, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
+  return { thinking, thought, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
 }
 
 // On any exit reset the scroll region (so a Ctrl-C mid-run never leaves the terminal with a stuck

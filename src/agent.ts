@@ -5,6 +5,7 @@ import type OpenAI from "openai";
 import { chat, getContextWindow } from "./llm";
 import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, inputBudget } from "./context";
+import { thinkingVerb, toolVerb } from "./format";
 import type { UI } from "./ui";
 
 // Loop guards, outermost to innermost:
@@ -47,13 +48,21 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
   let stall = 0; // consecutive turns with no real progress; trips STALL_LIMIT before MAX_TURNS
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    ui.thinking(true);
+    ui.thinking(true, thinkingVerb());
+    const t0 = Date.now();
     const res = await chat(messages, toolSchemas);
     ui.thinking(false);
     const choice = res.choices?.[0];
     if (!choice) throw new Error("model returned no choices");
     const msg = choice.message;
     messages.push(msg);
+
+    // Reasoning models return their chain-of-thought in `reasoning` (an OpenRouter extension, not in the
+    // SDK types). Surface it as a one-line "thought for Ns" — only when the model actually reasoned, so
+    // non-reasoning models stay quiet. ponytail: times the whole call, not the reasoning span alone (no
+    // streaming to separate them); switch to streamed deltas if that split ever matters.
+    const reasoning = (msg as any).reasoning;
+    if (typeof reasoning === "string" && reasoning.trim()) ui.thought(Math.round((Date.now() - t0) / 1000));
 
     // Output hit the token cap mid-reply — don't treat a cut-off answer as a finished one.
     if (choice.finish_reason === "length") {
@@ -98,7 +107,7 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
         }
       }
 
-      ui.thinking(true, call.function.name);
+      ui.thinking(true, toolVerb(call.function.name));
       const result = await dispatch(call.function.name, call.function.arguments);
       ui.thinking(false);
       messages.push({ role: "tool", tool_call_id: call.id, content: result });

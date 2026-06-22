@@ -82,6 +82,7 @@ let currentInfo: ModelInfo | undefined; // active model's catalog entry, for pri
 // The agent reports through this. Each method mutates the store and re-renders the Ink tree.
 export const ui: UI = {
   thinking: (on, label = "thinking") => set({ spinner: on ? label : null }),
+  thought: (seconds) => push({ kind: "info", lines: [c.dim(`✦ thought for ${seconds}s`)] }),
   tool: (name, args, result) => {
     if (name === "update_plan") {
       const raw = result.split("\n").filter(Boolean);
