@@ -104,7 +104,7 @@ function writeRows(content: string): string[] {
 
 // update_plan returns lines like "[x] step"; map each marker to a colored status icon.
 export const iconize = (l: string): string =>
-  l.startsWith("[x]") ? c.green(`✔ ${l.slice(4)}`)
+  l.startsWith("[x]") ? c.green(`✓ ${l.slice(4)}`)
   : l.startsWith("[~]") ? c.cyan(`▶ ${l.slice(4)}`)
   : l.startsWith("[ ]") ? c.dim(`☐ ${l.slice(4)}`)
   : l;

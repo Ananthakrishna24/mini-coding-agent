@@ -33,6 +33,7 @@ export type State = {
   ctxBudget: number;
   session: { prompt: number; completion: number; cost: number; turns: number }; // cumulative, for /usage
   picker: Picker | null;
+  gen: number; // bumped on /clear so <Static> remounts and reprints from scratch (see app.tsx)
 };
 
 let state: State = {
@@ -48,6 +49,7 @@ let state: State = {
   ctxBudget: 0,
   session: { prompt: 0, completion: 0, cost: 0, turns: 0 },
   picker: null,
+  gen: 0,
 };
 
 const listeners = new Set<() => void>();
@@ -107,10 +109,24 @@ async function syncModel() {
   ui.setModelLabel(describeModel(currentInfo, getModel()));
 }
 
+const bannerItem = (): NewItem => ({
+  kind: "info",
+  lines: bannerLines(currentInfo, getModel(), process.cwd().replace(homedir(), "~")),
+});
+
 export async function init() {
   await setModel(getModel()).catch(() => undefined); // load the real context window from the catalog up front
   await syncModel();
-  push({ kind: "info", lines: bannerLines(currentInfo, getModel(), process.cwd().replace(homedir(), "~")) });
+  push(bannerItem());
+}
+
+// /clear → a fresh session. Physically wipe the terminal (visible screen + scrollback) so the old log
+// is gone, not just scrolled off, then reset to the banner and bump `gen` so <Static> remounts and
+// reprints from scratch (a shrunk items array alone won't, since Static never re-renders past items).
+function freshSession() {
+  if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback, cursor home
+  state = { ...state, items: [{ id: nextId++, ...bannerItem() } as Item], gen: state.gen + 1, session: { prompt: 0, completion: 0, cost: 0, turns: 0 } };
+  emit();
 }
 
 // Run a goal through the agent, streaming events into the store. One run at a time (busy guard).
@@ -244,7 +260,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
       });
     }
     case "/clear":
-      return set({ items: [] });
+      return freshSession();
     default:
       return push({ kind: "info", lines: [c.yellow(`unknown command ${cmd} — /help for the list`)] });
   }

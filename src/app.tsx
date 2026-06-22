@@ -190,10 +190,13 @@ function Prompt() {
 }
 
 export function App() {
-  const items = useSyncExternalStore(store.subscribe, store.getSnapshot).items;
+  const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
   return (
     <Box flexDirection="column">
-      <Static items={items}>{(item) => <ItemView key={item.id} item={item} />}</Static>
+      {/* key=gen: /clear bumps it so Static remounts (its internal counter resets) and reprints fresh */}
+      <Static key={s.gen} items={s.items}>
+        {(item) => <ItemView key={item.id} item={item} />}
+      </Static>
       <Footer />
       <Prompt />
     </Box>
