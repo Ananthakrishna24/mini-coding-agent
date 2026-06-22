@@ -2,7 +2,8 @@
 // the UI interface the agent loop reports through, drives runs, and handles slash commands. Plain TS
 // (no React) so app.tsx can subscribe to it as an external store via useSyncExternalStore.
 import { run } from "./agent";
-import { getModel, setModel, modelInfo, searchModels, getContextWindow, type ModelInfo } from "./llm";
+import { getModel, setModel, modelInfo, searchModels, getContextWindow, resetCatalog, type ModelInfo } from "./llm";
+import { applyEnvFile } from "./onboarding";
 import { inputBudget } from "./context";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
@@ -38,6 +39,7 @@ export type State = {
   session: { prompt: number; completion: number; cost: number; turns: number }; // cumulative, for /usage
   picker: Picker | null;
   colorPicker: { sel: number } | null; // the /colors overlay: ↑↓ to move, ⏎ to apply, esc to cancel
+  setup: boolean; // the /setup overlay: re-run onboarding (pick provider, add a key) without restarting
   gen: number; // bumped on /clear so <Static> remounts and reprints from scratch (see app.tsx)
 };
 
@@ -55,6 +57,7 @@ let state: State = {
   session: { prompt: 0, completion: 0, cost: 0, turns: 0 },
   picker: null,
   colorPicker: null,
+  setup: false,
   gen: 0,
 };
 
@@ -186,6 +189,7 @@ const HELP = [
   `  ${c.primary("/model <query>")}    open the picker pre-filtered`,
   `  ${c.primary("/model <id>")}       switch to an exact model id (e.g. an OpenRouter "a/b" id)`,
   `  ${c.primary("/colors")}           change the accent color (presets or #rrggbb)`,
+  `  ${c.primary("/setup")}            add/switch provider + API key (OpenRouter, OpenAI)`,
   `  ${c.primary("/status")}           model, context window, working dir`,
   `  ${c.primary("/usage")}            tokens + estimated cost this session`,
   `  ${c.primary("/context")}          context-window usage right now`,
@@ -259,6 +263,26 @@ export async function colorPickerSelect() {
   }
 }
 
+// --- the /setup overlay: re-run onboarding in place (pick provider, add a key) without restarting ---
+export const openSetup = () => set({ setup: true });
+
+// Called by the overlay when it closes. On save: surface the freshly written key(s) to this process,
+// drop the cached catalog so the (now possibly new) provider's models appear, switch to the chosen
+// model, and refresh the banner. On cancel: just close. Once a second provider's key is added, /model
+// lists every provider's models because the catalog spans all providers that have a key.
+export async function finishSetup(saved: boolean, modelId?: string) {
+  set({ setup: false });
+  if (!saved) return;
+  applyEnvFile(); // load the new .env values into process.env for this run
+  resetCatalog(); // the next catalog fetch spans every provider with a key, including the one just added
+  if (modelId) await activate(modelId);
+  else {
+    await syncModel();
+    refreshBanner();
+  }
+  push({ kind: "info", lines: [c.green("✔ provider configured — /model lists every model you have a key for")] });
+}
+
 // Returns true if the input was a command (so the caller doesn't run it as a goal). onExit fires for
 // /exit so the component can tear Ink down.
 export async function submit(input: string, onExit: () => void): Promise<void> {
@@ -327,6 +351,8 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
         ],
       });
     }
+    case "/setup":
+      return openSetup();
     case "/clear":
       return freshSession();
     default:
@@ -338,6 +364,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
 export const COMMANDS = [
   { name: "/model", desc: "show or switch the model" },
   { name: "/colors", desc: "change the accent color" },
+  { name: "/setup", desc: "add/switch provider + API key" },
   { name: "/status", desc: "model, window, working dir" },
   { name: "/usage", desc: "tokens + cost this session" },
   { name: "/context", desc: "context-window usage" },

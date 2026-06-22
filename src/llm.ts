@@ -5,29 +5,40 @@
 import OpenAI from "openai";
 import { resolveProvider, PROVIDERS, type Provider } from "./provider";
 
+// A provider's key if one is configured right now (env, or a .env that --env-file / onboarding loaded).
+const keyFor = (p: Provider): string | undefined => {
+  const v = process.env[PROVIDERS[p].keyVar];
+  return v && v.trim() ? v.trim() : undefined;
+};
+// Every provider we have a usable key for — the set the model catalog is drawn from.
+export const availableProviders = (): Provider[] => (Object.keys(PROVIDERS) as Provider[]).filter(keyFor);
+
 const resolved = resolveProvider();
 if ("error" in resolved) {
   throw new Error(`${resolved.error} — copy .env.example to .env, or run interactively to set it up`);
 }
-const provider: Provider = resolved.provider;
-const conf = PROVIDERS[provider];
 
-const DEFAULT_MODEL = process.env.AGENT_MODEL || conf.defaultModel;
 const DEFAULT_WINDOW = 128_000; // assumed context window until we learn the real one from the catalog
-
-let model = DEFAULT_MODEL;
+let provider: Provider = resolved.provider; // follows the active model — switched when a model from another provider is picked
+let model = process.env.AGENT_MODEL || PROVIDERS[provider].defaultModel;
 let contextWindow = DEFAULT_WINDOW; // kept in sync with the active model so the budget tracks it
 
 export const getProvider = () => provider;
 export const getModel = () => model;
 export const getContextWindow = () => contextWindow;
 
-export const client = new OpenAI({
-  ...(conf.baseURL ? { baseURL: conf.baseURL } : {}), // OpenAI uses the SDK default; OpenRouter overrides it
-  apiKey: resolved.apiKey,
-  maxRetries: 4, // SDK retries 408/409/429/5xx + connection drops with exponential backoff + jitter
-  timeout: 120_000, // ms per request — fail a hung connection instead of stalling the whole run
-});
+// A client for a provider (OpenAI uses the SDK's default baseURL; OpenRouter overrides it). Only ever
+// called for a provider we have a key for.
+function buildClient(p: Provider): OpenAI {
+  const conf = PROVIDERS[p];
+  return new OpenAI({
+    ...(conf.baseURL ? { baseURL: conf.baseURL } : {}),
+    apiKey: keyFor(p) ?? "",
+    maxRetries: 4, // SDK retries 408/409/429/5xx + connection drops with exponential backoff + jitter
+    timeout: 120_000, // ms per request — fail a hung connection instead of stalling the whole run
+  });
+}
+let client = buildClient(provider); // rebuilt by setModel when the active model's provider changes
 
 // One completion. Pass tools to let the model call them (tool_choice: auto).
 export async function chat(
@@ -52,9 +63,11 @@ export type ModelInfo = {
   promptPrice: number; // USD per 1M input tokens
   completionPrice: number; // USD per 1M output tokens
   tools: boolean; // supports tool-calling — this is a tool-using agent, so non-tool models are useless here
+  provider: Provider; // which provider serves this model — so the client can be pointed at the right API
 };
 
 let catalog: ModelInfo[] | null = null; // fetched once, then cached for the session
+export const resetCatalog = () => void (catalog = null); // after /setup adds a key, so a new provider's models appear
 
 // OpenAI's catalog has no tool-capability flag and lists embeddings/audio/image models alongside
 // chat ones. Keep the obvious chat/reasoning families and drop non-chat endpoints by name.
@@ -63,30 +76,37 @@ function isOpenAIChatModel(id: string): boolean {
   return /^(gpt-|o\d|chatgpt-)/.test(id);
 }
 
-export async function fetchModels(): Promise<ModelInfo[]> {
-  if (catalog) return catalog;
-
-  if (provider === "openai") {
-    // GET /v1/models needs the key; pricing/context aren't in the response, so leave them 0.
-    const res = await client.models.list();
-    catalog = res.data
+// Models served by one provider, tagged with it. OpenAI's /v1/models lists ids only (no pricing/context),
+// so those fields stay 0 and the UI degrades like the OpenRouter miss path.
+async function fetchProviderModels(p: Provider): Promise<ModelInfo[]> {
+  const conf = PROVIDERS[p];
+  if (p === "openai") {
+    const res = await buildClient(p).models.list(); // GET /v1/models needs the key
+    return res.data
       .filter((m) => isOpenAIChatModel(m.id))
-      .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true }))
-      .sort((a, b) => a.id.localeCompare(b.id));
-    return catalog;
+      .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true, provider: p }));
   }
-
   const res = await fetch(`${conf.baseURL}/models`, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`model catalog fetch failed: ${res.status}`);
   const { data } = (await res.json()) as { data: any[] };
-  catalog = data.map((m) => ({
+  return data.map((m) => ({
     id: m.id,
     name: m.name ?? m.id,
     context: m.context_length ?? m.top_provider?.context_length ?? 0,
     promptPrice: Number(m.pricing?.prompt ?? 0) * 1e6,
     completionPrice: Number(m.pricing?.completion ?? 0) * 1e6,
     tools: Array.isArray(m.supported_parameters) && m.supported_parameters.includes("tools"),
+    provider: p,
   }));
+}
+
+// Catalog across every provider we have a key for, so /model lists them all at once. A provider that
+// fails (down, bad key) is swallowed so it can't hide the others. ponytail: ids are assumed unique
+// across providers (OpenRouter's "a/b" ids don't collide with OpenAI's bare ids); first match wins if not.
+export async function fetchModels(): Promise<ModelInfo[]> {
+  if (catalog) return catalog;
+  const lists = await Promise.all(availableProviders().map((p) => fetchProviderModels(p).catch(() => [] as ModelInfo[])));
+  catalog = lists.flat().sort((a, b) => a.id.localeCompare(b.id));
   return catalog;
 }
 
@@ -99,6 +119,10 @@ export async function modelInfo(id = model): Promise<ModelInfo | undefined> {
 export async function setModel(id: string): Promise<ModelInfo | undefined> {
   model = id;
   const info = await modelInfo(id).catch(() => undefined);
+  if (info && info.provider !== provider) {
+    provider = info.provider; // a model from another provider: point the client at that provider's API
+    client = buildClient(provider);
+  }
   if (info?.context) contextWindow = info.context;
   return info;
 }

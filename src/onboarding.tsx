@@ -28,7 +28,10 @@ function writeEnv(updates: Record<string, string>): void {
 
 type Step = "provider" | "key" | "model" | "done";
 
-const Onboarding: FC = () => {
+// Runs two ways: standalone at first launch (runOnboarding renders it before the main App and it calls
+// exit() when done), or as an in-app overlay for /setup (inApp: it calls onExit instead of tearing Ink
+// down, and esc cancels). onExit reports whether a config was saved and the chosen model id.
+export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId?: string) => void }> = ({ inApp, onExit }) => {
   const { exit } = useApp();
   const [step, setStep] = useState<Step>("provider");
   const [provider, setProvider] = useState<Provider>("openrouter");
@@ -41,7 +44,12 @@ const Onboarding: FC = () => {
 
   useInput((input, k) => {
     if (k.ctrl && input === "c") {
-      exit();
+      if (inApp) onExit?.(false); // overlay: cancel without tearing the app down
+      else exit();
+      return;
+    }
+    if (k.escape && inApp) {
+      onExit?.(false); // esc cancels the /setup overlay
       return;
     }
     if (step === "provider") {
@@ -78,7 +86,8 @@ const Onboarding: FC = () => {
           return;
         }
         setStep("done");
-        setTimeout(() => exit(), 600); // brief "saved" confirmation before tearing Ink down
+        if (inApp) onExit?.(true, chosen); // overlay: hand back to the store to reload + close
+        else setTimeout(() => exit(), 600); // standalone: brief "saved" confirmation before tearing Ink down
       } else if (k.backspace || k.delete) setModel((v) => v.slice(0, -1));
       else if (input && !k.ctrl && !k.meta) setModel((v) => v + input);
       return;
@@ -150,7 +159,7 @@ export async function runOnboarding(): Promise<boolean> {
 
 // Load KEY=value pairs from the just-written .env into process.env so ./llm sees them this run
 // (the original launch used --env-file, but that snapshot predates onboarding).
-function applyEnvFile(): void {
+export function applyEnvFile(): void {
   if (!fs.existsSync(ENV_PATH)) return;
   for (const line of fs.readFileSync(ENV_PATH, "utf8").split("\n")) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/);

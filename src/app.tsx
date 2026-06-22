@@ -3,8 +3,9 @@
 // the plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, type Item, type Picker } from "./store";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, finishSetup, type Item, type Picker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
+import { Onboarding } from "./onboarding";
 
 const indent = (s: string) => `  ${s}`;
 
@@ -236,7 +237,9 @@ export function App() {
         {(item) => <ItemView key={item.id} item={item} />}
       </Static>
       <Footer />
-      <Prompt />
+      {/* /setup swaps the prompt for the onboarding overlay; rendering it in place of Prompt means only
+          one useInput is active, so the two don't fight over the keyboard. */}
+      {s.setup ? <Onboarding inApp onExit={finishSetup} /> : <Prompt />}
     </Box>
   );
 }

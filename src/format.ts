@@ -270,7 +270,12 @@ export function toolEntry(name: string, argsJson: string, result: string): ToolE
 export function describeModel(info: ModelInfo | undefined, id: string): string {
   if (!info) return id;
   const short = info.id.split("/").pop() ?? info.id;
-  return `${short} · ${fmtTokens(info.context)} · ${fmtPrice(info.promptPrice)}/${fmtPrice(info.completionPrice)} per 1M`;
+  // Skip fields the provider didn't give us (OpenAI's /models lists ids only — no context/price).
+  const parts = [short];
+  if (info.context) parts.push(fmtTokens(info.context));
+  if (info.promptPrice || info.completionPrice) parts.push(`${fmtPrice(info.promptPrice)}/${fmtPrice(info.completionPrice)} per 1M`);
+  parts.push(c.dim(info.provider));
+  return parts.join(" · ");
 }
 
 // The final result, rendered as markdown rows (the mark/timing is added by the caller per surface).
