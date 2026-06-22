@@ -1,7 +1,9 @@
 // Offline self-check for context accounting — no model/network. Run: npm run check:context
 import assert from "node:assert/strict";
 import type OpenAI from "openai";
-import { estimateTokens, countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
+import { estimateTokens, countMessages, overBudget, compact, inputBudget } from "./context";
+
+const BUDGET = inputBudget(1_048_576); // a concrete window to exercise the budget math against
 
 // estimate: ~4 chars per token, rounded up
 assert.equal(estimateTokens(""), 0);
@@ -17,13 +19,16 @@ const small: OpenAI.ChatCompletionMessageParam[] = [
   { role: "user", content: "list the files" },
 ];
 assert.ok(countMessages(small) > 0);
-assert.equal(overBudget(small), false);
+assert.equal(overBudget(small, BUDGET), false);
 
 // a giant message trips the budget
 const huge: OpenAI.ChatCompletionMessageParam[] = [
-  { role: "user", content: "x".repeat(INPUT_BUDGET * 4 + 4) },
+  { role: "user", content: "x".repeat(BUDGET * 4 + 4) },
 ];
-assert.equal(overBudget(huge), true);
+assert.equal(overBudget(huge, BUDGET), true);
+
+// the budget never goes negative on a tiny window — it floors instead
+assert.ok(inputBudget(1000) >= 8_000, "tiny window floors the budget");
 
 // compact: keep system + goal + recent turns, drop the middle, never split a tool pair.
 // Odd length puts a tool message on the naive cut line — compact must step past it.

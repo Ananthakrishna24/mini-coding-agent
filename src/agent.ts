@@ -2,9 +2,9 @@
 // until the model finishes (final_answer or plain reply), stalls out, or hits the turn ceiling.
 import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
-import { chat } from "./llm";
+import { chat, getContextWindow } from "./llm";
 import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools";
-import { countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
+import { countMessages, overBudget, compact, inputBudget } from "./context";
 import type { UI } from "./ui";
 
 // Loop guards, outermost to innermost:
@@ -118,11 +118,15 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
       return { success: false, summary: `stopped: no progress in ${STALL_LIMIT} turns — the model looks stuck` };
     }
 
-    // Watch context size. Real usage is ground truth; our estimate decides when to act later.
+    // Watch context size. Budget tracks the active model's window (switchable at runtime). Real usage
+    // is ground truth; our estimate decides when to act later. Feed the % to the footer either way.
+    const budget = inputBudget(getContextWindow());
     const used = countMessages(messages);
     const actual = res.usage?.prompt_tokens;
-    ui.debug(`context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${INPUT_BUDGET} budget`);
-    if (overBudget(messages)) {
+    ui.context(actual ?? used, budget);
+    if (res.usage) ui.usage(res.usage.prompt_tokens ?? 0, res.usage.completion_tokens ?? 0); // feeds /usage
+    ui.debug(`context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${budget} budget`);
+    if (overBudget(messages, budget)) {
       const dropped = compact(messages);
       ui.warn(`over budget — trimmed ${dropped} old messages from the middle`);
     }

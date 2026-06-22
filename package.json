@@ -11,10 +11,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "openai": "^6.44.0"
+    "ink": "^7.1.0",
+    "openai": "^6.44.0",
+    "react": "^19.2.7"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
