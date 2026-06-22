@@ -225,12 +225,31 @@ const minionArt = ((): string[] => {
   }
 })();
 
+// An art line may lead with a 1-char colour key + "|" so one mascot is multi-coloured even though each
+// line is painted as a whole (w hat · y body · b overalls · k outline/feet · o clipboard). Lines with no
+// "key|" prefix (and the fallback) render plain yellow.
+const ART_COLOR: Record<string, Style> = {
+  w: ["whiteBright", "bold"],
+  y: ["yellowBright", "bold"],
+  b: ["blueBright", "bold"],
+  k: "gray",
+  o: ["redBright", "bold"],
+};
+function artRow(line: string): { t: string; s: (x: string) => string } {
+  if (line[1] !== "|") return { t: line, s: (x) => paint(["yellow", "bold"], x) };
+  const style = ART_COLOR[line[0]] ?? "dim";
+  return { t: line.slice(2), s: (x) => paint(style, x) };
+}
+
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
-  const minion = (x: string) => c.bold(c.yellow(x)); // minions are yellow — the brand mark wears it
-  const rows: { t: string; s?: (x: string) => string }[] = [
-    ...minionArt.map((t) => ({ t, s: minion })),
+  const minion = (x: string) => c.bold(c.yellow(x)); // the brand mark / title wears minion yellow
+  const art = minionArt.map(artRow);
+  const artW = Math.max(...art.map((a) => a.t.length));
+
+  // The welcome text, set beside the mascot (claude-code style) rather than stacked under it.
+  const text: { t: string; s?: (x: string) => string }[] = [
     { t: "minion code", s: minion },
     { t: "" },
     { t: `model    ${info?.id ?? id}` },
@@ -244,14 +263,21 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
     { t: "" },
     { t: "type a goal  ·  /help for commands  ·  'exit' to quit" },
   ];
-  const w = Math.max(...rows.map((r) => r.t.length));
+
+  // Pair the columns row-by-row, vertically centering the shorter (text) block against the taller (art).
+  const height = Math.max(art.length, text.length);
+  const top = Math.floor((height - text.length) / 2);
+  const lines = Array.from({ length: height }, (_, i) => {
+    const a = art[i];
+    const left = a ? a.s(a.t.padEnd(artW)) : " ".repeat(artW);
+    const r = text[i - top];
+    const right = r ? (r.s ? r.s(r.t) : c.dim(r.t)) : "";
+    return `${left}    ${right}`;
+  });
+
+  // Box it, measuring *visible* width so the ANSI colour codes don't throw the right border off.
+  const w = Math.max(...lines.map(visibleLen));
+  const pad = (s: string) => s + " ".repeat(w - visibleLen(s));
   const rule = (l: string, r: string) => c.cyan(l + "─".repeat(w + 2) + r);
-  return [
-    rule("╭", "╮"),
-    ...rows.map((row) => {
-      const padded = row.t.padEnd(w);
-      return `${c.cyan("│")} ${row.s ? row.s(padded) : c.dim(padded)} ${c.cyan("│")}`;
-    }),
-    rule("╰", "╯"),
-  ];
+  return [rule("╭", "╮"), ...lines.map((s) => `${c.cyan("│")} ${pad(s)} ${c.cyan("│")}`), rule("╰", "╯")];
 }
