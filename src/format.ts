@@ -16,10 +16,10 @@ type Style = Parameters<typeof styleText>[0];
 type Color = Extract<Style, string>; // a single styleText color name (Style also allows an array of them)
 const paint = (style: Style, s: string) => (useColor ? styleText(style, s) : s);
 
-// --- primary accent color (configurable via /colors, persisted to ~/.minion-code/color.txt) ---
+// --- primary accent color (configurable via /colors, persisted to ~/.minicode/color.txt) ---
 // Stored as a hex string and rendered with 24-bit truecolor so any shade works — named terminal
 // colors can't hit "dark orange". Falls back to plain text under NO_COLOR / non-TTY like every paint.
-const COLOR_FILE = join(homedir(), ".minion-code", "color.txt");
+const COLOR_FILE = join(homedir(), ".minicode", "color.txt");
 const DEFAULT_COLOR = "#ff8c00"; // dark orange
 
 export const COLOR_PRESETS: { name: string; hex: string }[] = [
@@ -53,7 +53,7 @@ export function setPrimaryColor(input: string): string | null {
   if (!hex) return null;
   primaryHex = hex;
   try {
-    mkdirSync(join(homedir(), ".minion-code"), { recursive: true });
+    mkdirSync(join(homedir(), ".minicode"), { recursive: true });
     writeFileSync(COLOR_FILE, hex);
   } catch {
     /* best-effort persist; the session still uses the new color */
@@ -282,32 +282,33 @@ const minionArt = ((): string[] => {
 })();
 
 // An art line may lead with a 1-char colour key + "|" so one mascot is multi-coloured even though each
-// line is painted as a whole (w hat · y body · b overalls · k outline/feet · o clipboard). Lines with no
-// "key|" prefix (and the fallback) render plain yellow.
+// line is painted as a whole (w hat · y body · b overalls · k outline/feet · o clipboard). The body (y)
+// and overalls (b) wear the primary accent so the mascot blends with the chosen color; the rest keep
+// fixed hues (white hat, gray goggles, red clipboard) so it still reads as a minion.
 const ART_COLOR: Record<string, Style> = {
   w: ["whiteBright", "bold"],
-  y: ["yellowBright", "bold"],
-  b: ["blueBright", "bold"],
   k: "gray",
   o: ["redBright", "bold"],
 };
 function artRow(line: string): { t: string; s: (x: string) => string } {
-  if (line[1] !== "|") return { t: line, s: (x) => paint(["yellow", "bold"], x) };
-  const style = ART_COLOR[line[0]] ?? "dim";
-  return { t: line.slice(2), s: (x) => paint(style, x) };
+  if (line[1] !== "|") return { t: line, s: (x) => paintHex(primaryHex, paint("bold", x)) };
+  const key = line[0];
+  const t = line.slice(2);
+  if (key === "y") return { t, s: (x) => paintHex(primaryHex, paint("bold", x)) };
+  if (key === "b") return { t, s: (x) => paint("dim", paintHex(primaryHex, x)) };
+  const style = ART_COLOR[key] ?? "dim";
+  return { t, s: (x) => paint(style, x) };
 }
 
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
-  const minion = (x: string) => c.bold(c.primary(x)); // the brand mark / title wears the primary accent
+  const title = "MiniCode";
   const art = minionArt.map(artRow);
   const artW = Math.max(...art.map((a) => a.t.length));
 
   // The welcome text, set beside the mascot (claude-code style) rather than stacked under it.
   const text: { t: string; s?: (x: string) => string }[] = [
-    { t: "minion code", s: minion },
-    { t: "" },
     { t: `model    ${info?.id ?? id}` },
     ...(info
       ? [
@@ -323,7 +324,7 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
   // Pair the columns row-by-row, vertically centering the shorter (text) block against the taller (art).
   const height = Math.max(art.length, text.length);
   const top = Math.floor((height - text.length) / 2);
-  const lines = Array.from({ length: height }, (_, i) => {
+  const body = Array.from({ length: height }, (_, i) => {
     const a = art[i];
     const left = a ? a.s(a.t.padEnd(artW)) : " ".repeat(artW);
     const r = text[i - top];
@@ -331,12 +332,21 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
     return `${left}    ${right}`;
   });
 
+  // Blank padding rows top and bottom so the art breathes evenly inside the frame.
+  const lines = ["", ...body, ""];
+
   // Full-width box: the frame extends end to end (claude-code style), content left-aligned inside.
   // Measure *visible* width so ANSI colour codes don't throw the right border off. -6 accounts for
   // the 2-space indent in the Ink UI + the "│ " / " │" borders on each side.
   const contentW = Math.max(...lines.map(visibleLen));
   const w = Math.max(contentW, termWidth() - 6);
   const pad = (s: string) => s + " ".repeat(w - visibleLen(s));
-  const rule = (l: string, r: string) => c.primary(l + "─".repeat(w + 2) + r);
-  return [rule("╭", "╮"), ...lines.map((s) => `${c.primary("│")} ${pad(s)} ${c.primary("│")}`), rule("╰", "╯")];
+
+  // Top border with the title embedded top-left: ╭─ MiniCode ──…──╮. The title wears the primary
+  // accent; the dashes fill the rest so the rule matches the bottom border's visible width (w + 4).
+  const titleStr = c.bold(c.primary(title));
+  const titleW = visibleLen(titleStr);
+  const topRule = c.primary("╭─ ") + titleStr + c.primary(" " + "─".repeat(Math.max(0, w - titleW - 1)) + "╮");
+  const bottomRule = c.primary("╰" + "─".repeat(w + 2) + "╯");
+  return [topRule, ...lines.map((s) => `${c.primary("│")} ${pad(s)} ${c.primary("│")}`), bottomRule];
 }

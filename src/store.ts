@@ -132,6 +132,16 @@ function freshSession() {
   emit();
 }
 
+// Refresh the banner after a color or model change: replace items[0] with a fresh banner, clear the
+// screen, and bump gen so <Static> remounts and reprints. Past items re-render in the new color too.
+function refreshBanner() {
+  if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  const items = [...state.items];
+  if (items.length) items[0] = { id: items[0].id, ...bannerItem() } as Item;
+  state = { ...state, items, gen: state.gen + 1 };
+  emit();
+}
+
 // Run a goal through the agent, streaming events into the store. One run at a time (busy guard).
 async function runGoal(goal: string) {
   if (state.busy) return;
@@ -170,6 +180,7 @@ async function activate(id: string) {
   const info = await setModel(id);
   currentInfo = info;
   await syncModel();
+  refreshBanner();
   push({ kind: "info", lines: [c.green(`✔ model → ${describeModel(info, id)}`)] });
 }
 
@@ -225,6 +236,7 @@ export async function colorPickerSelect() {
   closeColorPicker();
   if (chosen) {
     setPrimaryColor(chosen.hex);
+    refreshBanner();
     push({ kind: "info", lines: [c.green(`✔ color → ${chosen.hex}`)] });
   }
 }
@@ -254,6 +266,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
       if (!arg) return openColorPicker();
       const hex = setPrimaryColor(arg);
       if (!hex) return push({ kind: "info", lines: [c.yellow(`unknown color "${arg}" — /colors for the list`)] });
+      refreshBanner();
       return push({ kind: "info", lines: [c.green(`✔ color → ${hex}`)] });
     }
     case "/status": {
