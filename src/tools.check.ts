@@ -1,7 +1,7 @@
 // Offline self-check for the tools layer — no model/network needed. Run: npm run check
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { dispatch, capResult } from "./tools";
+import { dispatch, capResult, parseFinalAnswer } from "./tools";
 
 // capResult: small results pass through; big ones keep head + tail and mark what was cut.
 assert.equal(capResult("short"), "short");
@@ -66,5 +66,14 @@ assert.match(await dispatch("read_file", JSON.stringify({ path: "../../../etc/pa
 assert.match(await dispatch("nope", "{}"), /unknown tool/);
 assert.match(await dispatch("read_file", "{bad"), /not valid JSON/);
 assert.match(await dispatch("write_file", JSON.stringify({ path: 1 })), /must be strings/);
+
+// final_answer: the terminal payload is re-validated at the boundary — the schema sent to the model
+// isn't trusted. Good payload parses (and trims); every bad shape throws a fix-it error.
+assert.deepEqual(parseFinalAnswer(JSON.stringify({ success: true, summary: " done " })), { success: true, summary: "done" });
+assert.throws(() => parseFinalAnswer(JSON.stringify({ summary: "x" })), /success/, "missing success rejected");
+assert.throws(() => parseFinalAnswer(JSON.stringify({ success: "yes", summary: "x" })), /boolean/, "non-boolean success rejected");
+assert.throws(() => parseFinalAnswer(JSON.stringify({ success: true })), /summary/, "missing summary rejected");
+assert.throws(() => parseFinalAnswer(JSON.stringify({ success: true, summary: "  " })), /non-empty/, "blank summary rejected");
+assert.throws(() => parseFinalAnswer('{"success":true,"summa'), /valid JSON/, "truncated args rejected, not crashed on");
 
 console.log("ok — tools self-check passed");

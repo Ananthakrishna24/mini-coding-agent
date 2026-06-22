@@ -2,7 +2,7 @@
 // until the model stops calling tools or we hit the turn limit.
 import type OpenAI from "openai";
 import { chat } from "./llm";
-import { toolSchemas, dispatch } from "./tools";
+import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
 
 const MAX_TURNS = 12; // outer backstop for messy loops the signature guard can't catch
@@ -16,7 +16,7 @@ function buildSystemPrompt(): string {
     "Read a file before you edit it; prefer small, targeted edits over full rewrites.",
     "After changing code, run the relevant check or test.",
     "Stay inside the workspace. Don't delete or overwrite a file without a clear reason.",
-    "When the task is done, reply with a short summary and stop calling tools.",
+    "When the task is done, call final_answer with `success` and a short `summary` — don't just reply in prose.",
   ].join("\n");
 
   const env = [
@@ -28,7 +28,7 @@ function buildSystemPrompt(): string {
   return `${rules}\n\n## Environment\n${env}`;
 }
 
-export async function run(goal: string): Promise<string> {
+export async function run(goal: string): Promise<RunResult> {
   // Built once, never touched during the run, so the head stays byte-identical = cacheable.
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt() },
@@ -49,7 +49,9 @@ export async function run(goal: string): Promise<string> {
       console.warn("  ! model output truncated (hit max output tokens)");
     }
 
-    if (!msg.tool_calls?.length) return msg.content ?? "(no output)";
+    // Model stopped without calling final_answer — best-effort wrap of its prose so the caller still
+    // gets a uniform result. The structured path below is the intended exit.
+    if (!msg.tool_calls?.length) return { success: true, summary: msg.content ?? "(no output)" };
 
     for (const call of msg.tool_calls) {
       // Every tool_call must get a matching tool result or the next request is rejected —
@@ -67,7 +69,21 @@ export async function run(goal: string): Promise<string> {
       if (count >= REPEAT_LIMIT) {
         const stop = `stopped: repeated ${call.function.name} with the same arguments ${count}×`;
         messages.push({ role: "tool", tool_call_id: call.id, content: stop });
-        return stop;
+        return { success: false, summary: stop };
+      }
+
+      // Terminal signal. A valid payload ends the run with structured data; a malformed one comes
+      // back as an error so the model can correct the shape (Task 4.1), backed by the repeat guard
+      // above and MAX_TURNS below. Truncated args fail JSON.parse here and take the same correction path.
+      if (call.function.name === "final_answer") {
+        try {
+          const answer = parseFinalAnswer(call.function.arguments);
+          messages.push({ role: "tool", tool_call_id: call.id, content: "ok" });
+          return answer;
+        } catch (e: any) {
+          messages.push({ role: "tool", tool_call_id: call.id, content: `error: ${e.message}` });
+          continue;
+        }
       }
 
       const result = await dispatch(call.function.name, call.function.arguments);
@@ -86,5 +102,5 @@ export async function run(goal: string): Promise<string> {
     }
   }
 
-  return `stopped: hit ${MAX_TURNS}-turn limit`;
+  return { success: false, summary: `stopped: hit ${MAX_TURNS}-turn limit` };
 }

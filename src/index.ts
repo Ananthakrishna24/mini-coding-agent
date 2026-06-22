@@ -7,8 +7,9 @@ const goal =
 
 console.log(`> ${goal}\n`);
 try {
-  const summary = await run(goal);
-  console.log(`\n${summary}`);
+  const result = await run(goal);
+  console.log(`\n${result.success ? "✓" : "✗"} ${result.summary}`);
+  process.exit(result.success ? 0 : 1); // structured result → a real exit code a script can read
 } catch (e: any) {
   // Retries are exhausted by here — give the user one clean line, not a stack trace.
   console.error(`\nagent failed: ${e.message ?? e}`);
