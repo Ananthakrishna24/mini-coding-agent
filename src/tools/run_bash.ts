@@ -7,7 +7,9 @@ import { WORKSPACE } from "./workspace";
 const execFileAsync = promisify(execFile);
 
 export const run_bash: Tool = {
-  // ponytail: unsandboxed shell, intentional for a coding agent. Permission gating lands in the safety layer (Task 4.2).
+  // ponytail: commands pass the deny-list gate in dispatch (permissions.ts) before they reach here,
+  // but the shell itself is still unsandboxed — the gate is an accident-fence, not a jail. Real
+  // containment = an OS sandbox (bubblewrap/Landlock, Seatbelt) with no net / no writes outside the tree.
   schema: {
     type: "function",
     function: {

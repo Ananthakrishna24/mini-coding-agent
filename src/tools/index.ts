@@ -3,6 +3,7 @@
 // Add a tool: create ./<name>.ts exporting a `Tool`, import it here, and add it to `registry`.
 // The registry key is the tool's name. That's the whole extension story.
 import type { Tool } from "./types";
+import { check } from "../permissions";
 import { read_file } from "./read_file";
 import { write_file } from "./write_file";
 import { edit_file } from "./edit_file";
@@ -36,6 +37,11 @@ export async function dispatch(name: string, argsJson: string): Promise<string> 
   } catch {
     return `error: arguments for '${name}' were not valid JSON`;
   }
+
+  // Safety gate, before anything runs. A blocked call is a result the model can recover from,
+  // not a crash — same shape as every other tool error.
+  const decision = check(name, args);
+  if (!decision.allow) return `error: blocked: ${decision.reason}`;
 
   try {
     return capResult(await tool.run(args));
