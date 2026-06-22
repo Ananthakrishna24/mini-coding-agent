@@ -136,7 +136,7 @@ export async function run(goal: string, ui: UI, depth = 0): Promise<RunResult> {
           messages.push({ role: "tool", tool_call_id: call.id, content: `error: ${e.message}` });
           continue;
         }
-        ui.subagent(subGoal);
+        ui.enterSubagent(subGoal); // open the nested block; the child reports through the same ui, railed in
         // Its own context; only the summary returns. A subagent that throws (e.g. the model call fails
         // after retries) comes back as a failure result, never as an exception that kills the parent run.
         let sub: RunResult;
@@ -146,8 +146,8 @@ export async function run(goal: string, ui: UI, depth = 0): Promise<RunResult> {
           sub = { success: false, summary: `subagent crashed: ${e.message ?? e}` };
         }
         const out = formatSubResult(sub);
+        ui.exitSubagent(out); // close the block with the ✓/✗ summary
         messages.push({ role: "tool", tool_call_id: call.id, content: out });
-        ui.tool(call.function.name, call.function.arguments, out);
         progressed = true; // a completed delegation is real work — don't count it toward the stall guard
         continue;
       }

@@ -4,7 +4,7 @@
 import { homedir } from "node:os";
 import { setFooter, clearFooter, cleanup as screenCleanup } from "./screen";
 import type { ModelInfo } from "./llm";
-import { c, wrap, visibleLen, termWidth, iconize, toolEntry, resultBody, bannerLines } from "./format";
+import { c, wrap, visibleLen, termWidth, iconize, toolEntry, resultBody, bannerLines, subHeader, rail } from "./format";
 
 export { describeModel } from "./format";
 
@@ -15,7 +15,8 @@ const useColor = process.stdout.isTTY === true && !process.env.NO_COLOR;
 export type UI = {
   thinking: (on: boolean, label?: string) => void;
   thought: (seconds: number) => void; // "thought for Ns" — only emitted when the model returned reasoning
-  subagent: (goal: string) => void; // announce a delegation before the child run begins (it can take a while)
+  enterSubagent: (goal: string) => void; // a delegation begins: open the block and nest what follows under it
+  exitSubagent: (result: string) => void; // the subagent finished: close the block with its ✓/✗ summary
   tool: (name: string, args: string, result: string) => void;
   warn: (msg: string) => void;
   debug: (msg: string) => void;
@@ -27,8 +28,10 @@ export type UI = {
 };
 
 // Print rows under the tool header with the ⎿ connector on the first line only — the rest align.
-function block(rows: string[]): void {
-  rows.forEach((row, i) => console.log(`    ${c.dim(i === 0 ? "⎿" : " ")} ${row}`));
+// `depth` nests the block under a subagent's rail so its output reads as the subagent's, not the parent's.
+function block(rows: string[], depth = 0): void {
+  const r = rail(depth);
+  rows.forEach((row, i) => console.log(`    ${r}${c.dim(i === 0 ? "⎿" : " ")} ${row}`));
 }
 
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -39,6 +42,7 @@ const CLEAR = "\r\x1b[K"; // carriage return + clear-to-end-of-line
 export function createUI(): UI {
   let timer: ReturnType<typeof setInterval> | null = null;
   let i = 0;
+  let nest = 0; // subagent nesting level; everything the agent reports while > 0 is railed in one level
 
   // Pinned-footer state for the current run: the plan checklist, its progress, the model label, and
   // live context usage. The footer redraws whenever any of these change (see screen.ts for the pin).
@@ -76,7 +80,7 @@ export function createUI(): UI {
       if (timer) return;
       process.stdout.write(HIDE);
       timer = setInterval(() => {
-        process.stdout.write(`${CLEAR}  ${c.primary(SPIN[(i = (i + 1) % SPIN.length)])} ${c.dim(label + "…")}`);
+        process.stdout.write(`${CLEAR}  ${rail(nest)}${c.primary(SPIN[(i = (i + 1) % SPIN.length)])} ${c.dim(label + "…")}`);
       }, 80);
     } else if (timer) {
       clearInterval(timer);
@@ -85,24 +89,35 @@ export function createUI(): UI {
     }
   }
 
-  const thought = (seconds: number) => console.log(c.dim(`  ✦ thought for ${seconds}s`));
-  const subagent = (goal: string) => console.log(`\n  ${c.primary("⤷")} ${c.dim("delegating to subagent:")} ${goal}`);
+  const thought = (seconds: number) => console.log(c.dim(`  ${rail(nest)}✦ thought for ${seconds}s`));
+
+  // Open a delegation block: a header with the AGENT badge + goal, then bump the nest so everything the
+  // subagent reports is railed one level in. Close it with the subagent's ✓/✗ summary under the rail.
+  const enterSubagent = (goal: string) => {
+    console.log(`\n  ${rail(nest)}${subHeader(goal)}`);
+    nest++;
+  };
+  const exitSubagent = (result: string) => {
+    nest = Math.max(0, nest - 1);
+    console.log(`  ${rail(nest)}${c.dim("⎿")} ${result}`);
+  };
 
   function tool(name: string, argsJson: string, result: string) {
     const { header, rows } = toolEntry(name, argsJson, result);
     console.log(); // a blank line before each entry — breathing room between tool calls
-    console.log(`  ${header}`);
+    console.log(`  ${rail(nest)}${header}`);
     if (name === "update_plan" && useColor) return setPlan(result); // checklist lives in the pinned footer
-    block(rows);
+    block(rows, nest);
   }
 
-  const warn = (m: string) => console.log(c.yellow(`  ! ${m}`));
+  const warn = (m: string) => console.log(c.yellow(`  ${rail(nest)}! ${m}`));
   const debug = (m: string) => void (process.env.DEBUG && console.log(c.dim(`  ~ ${m}`)));
 
   const startRun = () => {
     plan = [];
     planDone = planTotal = 0;
     ctxPct = null;
+    nest = 0; // a prior run that died mid-delegation must not leave the next one indented
   };
   const endRun = () => {
     plan = [];
@@ -118,7 +133,7 @@ export function createUI(): UI {
   };
   const usage = () => {}; // session usage tracking is an interactive (Ink) feature; no-op when scripted
 
-  return { thinking, thought, subagent, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
+  return { thinking, thought, enterSubagent, exitSubagent, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
 }
 
 // On any exit reset the scroll region (so a Ctrl-C mid-run never leaves the terminal with a stuck

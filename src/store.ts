@@ -10,12 +10,16 @@ import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, se
 
 // One scrollback entry. Tool calls, warnings, the user's lines, slash-command output, and run results
 // all land here and render in Ink's <Static> region so they persist as the log scrolls.
-export type Item =
-  | { id: number; kind: "user"; text: string }
-  | { id: number; kind: "tool"; name: string; args: string; result: string }
-  | { id: number; kind: "warn"; text: string }
-  | { id: number; kind: "info"; lines: string[] } // slash-command output
-  | { id: number; kind: "result"; success: boolean; summary: string; ms: number };
+// `depth` is the subagent nesting level (0 = the top agent); the UI rails an item one gutter in per
+// level so a subagent's activity reads as the subagent's, not the parent's.
+export type Item = { id: number; depth?: number } & (
+  | { kind: "user"; text: string }
+  | { kind: "tool"; name: string; args: string; result: string }
+  | { kind: "warn"; text: string }
+  | { kind: "info"; lines: string[] } // slash-command output
+  | { kind: "subagent"; goal: string } // a delegation header: opens the nested block
+  | { kind: "result"; success: boolean; summary: string; ms: number }
+);
 
 // The /model picker overlay: a filterable, arrow-key list of tool-capable models. Null = closed.
 export type Picker = { query: string; items: ModelInfo[]; sel: number; loading: boolean };
@@ -64,11 +68,12 @@ function set(patch: Partial<State>) {
 // Distributive Omit so each union member keeps its own fields (a plain Omit<Item,"id"> would collapse
 // to only the keys common to every member — i.e. just `kind`). Distribution needs a naked type param.
 type DistOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
-type NewItem = DistOmit<Item, "id">;
+type NewItem = DistOmit<Item, "id" | "depth">; // callers don't set id/depth — push stamps both
 
 let nextId = 1;
+let nest = 0; // subagent nesting level, set by enter/exitSubagent; stamped onto every pushed item
 function push(item: NewItem) {
-  set({ items: [...state.items, { id: nextId++, ...item } as Item] });
+  set({ items: [...state.items, { id: nextId++, depth: nest, ...item } as Item] });
 }
 
 export const store = {
@@ -85,7 +90,16 @@ let currentInfo: ModelInfo | undefined; // active model's catalog entry, for pri
 export const ui: UI = {
   thinking: (on, label = "thinking") => set({ spinner: on ? label : null }),
   thought: (seconds) => push({ kind: "info", lines: [c.dim(`✦ thought for ${seconds}s`)] }),
-  subagent: (goal) => push({ kind: "info", lines: [`${c.primary("⤷")} ${c.dim("delegating to subagent:")} ${goal}`] }),
+  // Open a delegation block (header at the parent level), then nest what the subagent does one level in.
+  enterSubagent: (goal) => {
+    push({ kind: "subagent", goal });
+    nest++;
+  },
+  // Close the block: drop back a level, then print the subagent's ✓/✗ summary aligned with its header.
+  exitSubagent: (result) => {
+    nest = Math.max(0, nest - 1);
+    push({ kind: "info", lines: [`${c.dim("⎿")} ${result}`] });
+  },
   tool: (name, args, result) => {
     if (name === "update_plan") {
       const raw = result.split("\n").filter(Boolean);
@@ -95,7 +109,10 @@ export const ui: UI = {
   },
   warn: (text) => push({ kind: "warn", text }),
   debug: (msg) => void (process.env.DEBUG && push({ kind: "warn", text: msg })),
-  startRun: () => set({ plan: [], planDone: 0, planTotal: 0, ctxPct: null }),
+  startRun: () => {
+    nest = 0; // a prior run that died mid-delegation must not leave the next one indented
+    set({ plan: [], planDone: 0, planTotal: 0, ctxPct: null });
+  },
   endRun: () => set({ spinner: null }),
   setModelLabel: (modelLabel) => set({ modelLabel }),
   context: (used, budget) => set({ ctxUsed: used, ctxBudget: budget, ctxPct: Math.min(100, Math.round((used / budget) * 100)) }),
@@ -167,7 +184,7 @@ const HELP = [
   c.bold("commands"),
   `  ${c.primary("/model")}            open the model picker (↑↓ to choose, type to filter, ⏎ select, esc cancel)`,
   `  ${c.primary("/model <query>")}    open the picker pre-filtered`,
-  `  ${c.primary("/model <id>")}       switch to an exact OpenRouter id`,
+  `  ${c.primary("/model <id>")}       switch to an exact model id (e.g. an OpenRouter "a/b" id)`,
   `  ${c.primary("/colors")}           change the accent color (presets or #rrggbb)`,
   `  ${c.primary("/status")}           model, context window, working dir`,
   `  ${c.primary("/usage")}            tokens + estimated cost this session`,

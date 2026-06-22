@@ -4,11 +4,13 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, type Item, type Picker } from "./store";
-import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex } from "./format";
+import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
 
 const indent = (s: string) => `  ${s}`;
 
 function ItemView({ item }: { item: Item }) {
+  const r = rail(item.depth ?? 0); // left gutter that nests a subagent's items one level in
+  const ind = (s: string) => `  ${r}${s}`;
   switch (item.kind) {
     case "user":
       return (
@@ -17,22 +19,28 @@ function ItemView({ item }: { item: Item }) {
         </Box>
       );
     case "warn":
-      return <Text>{indent(c.yellow(`! ${item.text}`))}</Text>;
+      return <Text>{ind(c.yellow(`! ${item.text}`))}</Text>;
     case "info":
       return (
         <Box flexDirection="column" marginTop={1}>
           {item.lines.map((l, i) => (
-            <Text key={i}>{indent(l)}</Text>
+            <Text key={i}>{ind(l)}</Text>
           ))}
+        </Box>
+      );
+    case "subagent": // delegation header: the AGENT badge + the subagent's goal, opening the nested block
+      return (
+        <Box marginTop={1}>
+          <Text>{ind(subHeader(item.goal))}</Text>
         </Box>
       );
     case "tool": {
       const { header, rows } = toolEntry(item.name, item.args, item.result);
       return (
         <Box flexDirection="column" marginTop={1}>
-          <Text>{indent(header)}</Text>
-          {rows.map((r, i) => (
-            <Text key={i}>{`    ${c.dim(i === 0 ? "⎿" : " ")} ${r}`}</Text>
+          <Text>{ind(header)}</Text>
+          {rows.map((row, i) => (
+            <Text key={i}>{`    ${r}${c.dim(i === 0 ? "⎿" : " ")} ${row}`}</Text>
           ))}
         </Box>
       );
@@ -44,12 +52,12 @@ function ItemView({ item }: { item: Item }) {
       return (
         <Box flexDirection="column" marginTop={1}>
           {body.length === 1 ? (
-            <Text>{indent(`${mark} ${body[0]}  ${took}`)}</Text>
+            <Text>{ind(`${mark} ${body[0]}  ${took}`)}</Text>
           ) : (
             <>
-              <Text>{indent(`${mark} ${took}`)}</Text>
+              <Text>{ind(`${mark} ${took}`)}</Text>
               {body.map((l, i) => (
-                <Text key={i}>{indent(l)}</Text>
+                <Text key={i}>{ind(l)}</Text>
               ))}
             </>
           )}

@@ -131,7 +131,6 @@ const VERB: Record<string, string> = {
 
 function displayArg(name: string, args: any): string {
   if (name === "run_bash") return clip(oneLine(String(args.command ?? "")), 56);
-  if (name === "spawn_agent") return clip(oneLine(String(args.goal ?? "")), 56);
   if (typeof args.path === "string") return args.path;
   if (name === "update_plan") return Array.isArray(args.plan) ? `${args.plan.length} steps` : "";
   return clip(oneLine(JSON.stringify(args ?? {})), 56);
@@ -153,6 +152,12 @@ const badge = (name: string, failed: boolean) => {
   return paint(style, ` ${(VERB[name] ?? name).toUpperCase()} `);
 };
 
+// Delegation rendering, shared by the console log (ui.ts) and the Ink history (app.tsx) so a subagent
+// reads the same in both. The header opens the block ( AGENT  goal); `rail` is the left gutter that
+// nests everything the subagent does one level in, so its tool calls don't look like the parent's.
+export const subHeader = (goal: string) => `${badge("spawn_agent", false)} ${c.dim(clip(oneLine(goal), 64))}`;
+export const rail = (depth: number) => (depth > 0 ? c.dim("│ ".repeat(depth)) : "");
+
 // Live-spinner words. The model phase gets a random gerund each turn so a wait reads like real work,
 // not a frozen "thinking…"; tool calls get a present-tense action ("Reading…") instead of the raw name.
 const THINKING_VERBS = [
@@ -168,7 +173,6 @@ const TOOL_GERUND: Record<string, string> = {
   edit_file: "Editing",
   run_bash: "Running",
   update_plan: "Planning",
-  spawn_agent: "Delegating",
 };
 export const toolVerb = (name: string) => TOOL_GERUND[name] ?? name;
 
