@@ -1,5 +1,5 @@
 // The agent loop: call the model with tools, run any tool calls, feed results back, repeat
-// until the model stops calling tools or we hit the turn limit.
+// until the model finishes (final_answer or plain reply), stalls out, or hits the turn ceiling.
 import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
 import { chat } from "./llm";
@@ -7,8 +7,19 @@ import { toolSchemas, dispatch, parseFinalAnswer, type RunResult } from "./tools
 import { countMessages, overBudget, compact, INPUT_BUDGET } from "./context";
 import type { UI } from "./ui";
 
-const MAX_TURNS = 12; // outer backstop for messy loops the signature guard can't catch
-const REPEAT_LIMIT = 3; // 3rd identical tool call (same name + args) = stuck; retrying won't help
+// Loop guards, outermost to innermost:
+//  - MAX_TURNS: absolute ceiling so a run is always bounded (override with AGENT_MAX_TURNS). High on
+//    purpose — it's a safety net, not the thing that should normally stop a run.
+//  - STALL_LIMIT: consecutive turns with no real progress = the model is spinning, stop. This is the
+//    real guard, so a long *productive* run keeps going and only a genuinely stuck one is cut.
+//  - REPEAT_LIMIT: the same call (name + args) seen this many times = a tight loop, stop immediately.
+const MAX_TURNS = Number(process.env.AGENT_MAX_TURNS) || 50;
+const STALL_LIMIT = 5;
+const REPEAT_LIMIT = 3;
+
+// "Progress" = a new, non-erroring call to a tool that reads or changes the world. Re-running a call
+// or only re-planning doesn't count, so a model that just spins its wheels still trips STALL_LIMIT.
+const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "run_bash"]);
 
 // Standing orders live in prompts/system.md — editable without touching code, read once at startup.
 // Fixed block first, environment last: an identical prefix is what lets the provider cache it across
@@ -33,6 +44,7 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
   ];
 
   const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
+  let stall = 0; // consecutive turns with no real progress; trips STALL_LIMIT before MAX_TURNS
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     ui.thinking(true);
@@ -52,6 +64,7 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
     // gets a uniform result. The structured path below is the intended exit.
     if (!msg.tool_calls?.length) return { success: true, summary: msg.content ?? "(no output)" };
 
+    let progressed = false; // did this turn do real, new work? a productive turn resets the stall counter
     for (const call of msg.tool_calls) {
       // Every tool_call must get a matching tool result or the next request is rejected —
       // even ones we can't run. A skipped call still needs its tombstone.
@@ -90,6 +103,19 @@ export async function run(goal: string, ui: UI): Promise<RunResult> {
       ui.thinking(false);
       messages.push({ role: "tool", tool_call_id: call.id, content: result });
       ui.tool(call.function.name, call.function.arguments, result);
+
+      // A first-time, non-erroring read/write/edit/bash call is real progress (re-runs and plan-only
+      // turns don't count) — enough to clear the stall counter for this turn.
+      if (count === 1 && !result.startsWith("error:") && PROGRESS_TOOLS.has(call.function.name)) {
+        progressed = true;
+      }
+    }
+
+    // Stall guard: too many barren turns in a row means the model is looping or stuck on something it
+    // can't crack. Stop with a useful message instead of grinding all the way to MAX_TURNS.
+    if (progressed) stall = 0;
+    else if (++stall >= STALL_LIMIT) {
+      return { success: false, summary: `stopped: no progress in ${STALL_LIMIT} turns — the model looks stuck` };
     }
 
     // Watch context size. Real usage is ground truth; our estimate decides when to act later.
