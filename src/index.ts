@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // CLI shell. Three modes:
 //  - goal on the command line → run once, print, exit with a real code (scriptable).
 //  - interactive TTY → the Ink chat UI (app.tsx): chat scrollback, /commands, live status.

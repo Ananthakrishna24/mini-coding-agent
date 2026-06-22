@@ -136,6 +136,7 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
 // false if onboarding wasn't needed. On a non-TTY, prints instructions and exits the process so the
 // app never hangs waiting on input that can't arrive.
 export async function runOnboarding(): Promise<boolean> {
+  applyEnvFile(); // load a project .env first (the dev launcher uses --env-file; the published binary has no such flag)
   if (!needsOnboarding()) return false;
 
   if (!process.stdin.isTTY) {

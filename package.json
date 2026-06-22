@@ -1,14 +1,26 @@
 {
-  "name": "mini-coding-agent",
-  "version": "0.0.0",
-  "private": true,
+  "name": "myminicode",
+  "version": "0.1.0",
   "type": "module",
   "description": "A minimal terminal coding agent powered by an LLM.",
+  "bin": {
+    "minicode": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "ascii-art.txt",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx --env-file=.env src/index.ts",
     "start": "tsx --env-file=.env src/index.ts",
     "check": "tsx src/tools.check.ts && tsx src/context.check.ts && tsx src/permissions.check.ts && tsx src/diff.check.ts && tsx src/md.check.ts && tsx src/format.check.ts && tsx src/memory.check.ts && tsx src/spawn_agent.check.ts && tsx src/provider.check.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsup src/index.ts --format esm --target node20 --clean && rm -rf dist/prompts && cp -r src/prompts dist/prompts",
+    "prepublishOnly": "npm run check && npm run build"
   },
   "dependencies": {
     "ink": "^7.1.0",
@@ -18,6 +30,7 @@
   "devDependencies": {
     "@types/node": "^26.0.0",
     "@types/react": "^19.2.17",
+    "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }
