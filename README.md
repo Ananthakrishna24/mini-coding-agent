@@ -60,7 +60,7 @@ minicode "fix the failing test"   # one-shot
 |---|---|
 | **OpenRouter** | ✅ ready |
 | **OpenAI** | ✅ ready |
-| **Anthropic** | ✅ ready |
+| **Anthropic** | 🚧 coming soon|
 | **Chinese models** (DeepSeek, Qwen, Kimi…) | 🚧 coming soon |
 
 Drop in an API key and go — switch models anytime with `/model`.
