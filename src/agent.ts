@@ -26,7 +26,15 @@ const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "run_bas
 // Standing orders live in prompts/system.md — editable without touching code, read once at startup.
 // Fixed block first, environment last: an identical prefix is what lets the provider cache it across
 // turns, and the cache match stops at the first byte that differs.
-const SYSTEM_RULES = readFileSync(new URL("./prompts/system.md", import.meta.url), "utf8").trim();
+// The published build inlines the prompt as a minified JS string (tsup `--loader .md=text`) so the
+// dist ships no plaintext system.md; dev (tsx) can't load .md, so it falls back to reading the file.
+// ponytail: cosmetic deterrent only — the prompt is sent to the LLM, so a proxy recovers it regardless.
+let SYSTEM_RULES: string;
+try {
+  SYSTEM_RULES = ((await import("./prompts/system.md")) as { default: string }).default.trim();
+} catch {
+  SYSTEM_RULES = readFileSync(new URL("./prompts/system.md", import.meta.url), "utf8").trim();
+}
 
 function buildSystemPrompt(): string {
   const env = [
