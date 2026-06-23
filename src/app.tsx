@@ -6,9 +6,12 @@ import { Box, Text, Static, useApp, useInput } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
 import { clipboardImageToTemp } from "./images";
+import { matchFiles } from "./tools/workspace";
 import { Onboarding } from "./onboarding";
 
 const indent = (s: string) => `  ${s}`;
+
+const FILE_MENU = 8; // rows shown in the @-file picker
 
 function ItemView({ item }: { item: Item }) {
   const r = rail(item.depth ?? 0); // left gutter that nests a subagent's items one level in
@@ -176,10 +179,17 @@ function Prompt() {
   const busy = s.busy;
   const [buf, setBuf] = useState("");
   const [sel, setSel] = useState(0);
+  const [fileSel, setFileSel] = useState(0);
 
   // "/" menu: filter commands by the first token while it has no space yet.
   const firstTok = buf.split(/\s+/)[0];
   const menu = buf.startsWith("/") && !buf.includes(" ") ? COMMANDS.filter((cmd) => cmd.name.startsWith(firstTok)) : [];
+
+  // "@" file picker: trigger on a trailing @token (start of line or after a space). The capture is the
+  // query typed after @. Empty list (no @ / no matches) = picker closed.
+  const atMatch = !busy ? buf.match(/(?:^|\s)@([^\s@]*)$/) : null;
+  const fileMenu = atMatch ? matchFiles(atMatch[1]) : [];
+  const fileIdx = Math.min(fileSel, Math.max(0, fileMenu.length - 1));
 
   useInput((input, key) => {
     // Picker mode owns the keyboard: type to filter, arrows to move, enter to pick, esc to cancel.
@@ -214,6 +224,19 @@ function Prompt() {
         if (p) setBuf((b) => `${b}${b && !b.endsWith(" ") ? " " : ""}${p} `);
       });
       return;
+    }
+    // "@" file picker owns Enter/Tab/arrows while open: ⏎ or Tab inserts the highlighted path in place
+    // of the @token, arrows move. Typing/backspace fall through to edit the query (and reposition the
+    // menu). It closes on its own when the trailing @token breaks (space) or stops matching.
+    if (fileMenu.length && atMatch) {
+      if (key.return || key.tab) {
+        const chosen = fileMenu[fileIdx];
+        setBuf(buf.slice(0, buf.length - atMatch[1].length - 1) + chosen + " ");
+        setFileSel(0);
+        return;
+      }
+      if (key.upArrow) return setFileSel((n) => (n - 1 + fileMenu.length) % fileMenu.length);
+      if (key.downArrow) return setFileSel((n) => (n + 1) % fileMenu.length);
     }
     if (key.return) {
       // With the "/" menu open, Enter runs the highlighted command (so "/mo"+⏎ → /model), not the
@@ -255,6 +278,23 @@ function Prompt() {
           ))}
         </Box>
       )}
+      {fileMenu.length > 0 && (() => {
+        // Scroll a FILE_MENU-row window around the highlighted file (same viewport trick as the model picker).
+        const start = Math.max(0, Math.min(fileIdx - Math.floor(FILE_MENU / 2), Math.max(0, fileMenu.length - FILE_MENU)));
+        return (
+          <Box flexDirection="column" paddingLeft={1}>
+            {fileMenu.slice(start, start + FILE_MENU).map((f, i) => {
+              const active = start + i === fileIdx;
+              return (
+                <Text key={f} color={active ? getPrimaryColor() : undefined}>
+                  {`${active ? "›" : " "} ${f}`}
+                </Text>
+              );
+            })}
+            {fileMenu.length > FILE_MENU && <Text>{`  ${c.dim(`${fileIdx + 1}/${fileMenu.length}`)}`}</Text>}
+          </Box>
+        );
+      })()}
     </Box>
   );
 }
