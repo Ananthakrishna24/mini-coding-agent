@@ -7,6 +7,8 @@ import { getModel, setModel, modelInfo, searchModels, getContextWindow, getEffor
 import { applyEnvFile } from "./onboarding";
 import { attachImages } from "./images";
 import { inputBudget } from "./context";
+import { newSessionId, saveSession, listSessions, loadSession, type SessionMeta } from "./sessions";
+import { resetModelPolicy, type ModelPolicy } from "./model_policy";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
 import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS } from "./format";
@@ -27,6 +29,15 @@ export type Item = { id: number; depth?: number } & (
 // The /model picker overlay: a filterable, arrow-key list of tool-capable models. Null = closed.
 export type Picker = { query: string; items: ModelInfo[]; sel: number; loading: boolean };
 
+// The /resume picker overlay: an arrow-key list of past chat sessions. Null = closed.
+export type ResumePicker = { items: SessionMeta[]; sel: number };
+
+// The model-policy overlay, shown once on the first delegation: how should subagents pick a model?
+export const POLICY_OPTIONS: { value: ModelPolicy; label: string }[] = [
+  { value: "parent", label: "use the current model for all subagents" },
+  { value: "auto", label: "let the agent pick the best model per task" },
+];
+
 export type State = {
   items: Item[];
   busy: boolean;
@@ -40,6 +51,8 @@ export type State = {
   ctxBudget: number;
   session: { prompt: number; completion: number; cost: number; turns: number }; // cumulative, for /usage
   picker: Picker | null;
+  resumePicker: ResumePicker | null; // the /resume overlay: ↑↓ to move, ⏎ to reopen, esc to cancel
+  policyPicker: { sel: number } | null; // the first-delegation model-policy overlay; pauses the run until answered
   colorPicker: { sel: number } | null; // the /colors overlay: ↑↓ to move, ⏎ to apply, esc to cancel
   effortPicker: { sel: number } | null; // the reasoning-effort overlay, opened after picking a reasoning model
   setup: boolean; // the /setup overlay: re-run onboarding (pick provider, add a key) without restarting
@@ -63,6 +76,8 @@ let state: State = {
   ctxBudget: 0,
   session: { prompt: 0, completion: 0, cost: 0, turns: 0 },
   picker: null,
+  resumePicker: null,
+  policyPicker: null,
   colorPicker: null,
   effortPicker: null,
   setup: false,
@@ -72,6 +87,13 @@ let state: State = {
 // The live message array for this session, threaded through every top-level run so the model sees the
 // whole conversation across turns (subagents get their own clean context). Reset by /clear.
 let conversation: OpenAI.ChatCompletionMessageParam[] = [];
+let sessionId = newSessionId(); // this chat's id on disk; a new one per /clear or resume
+let sessionTitle = ""; // first user line, shown in the /resume list
+
+// Persist the current thread so /resume can reopen it. Called after every run; cheap and best-effort.
+function persist() {
+  saveSession({ id: sessionId, title: sessionTitle || "(untitled)", cwd: process.cwd(), updated: Date.now(), turns: state.session.turns, messages: conversation });
+}
 
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
@@ -137,7 +159,16 @@ export const ui: UI = {
     const s = state.session;
     set({ session: { prompt: s.prompt + prompt, completion: s.completion + completion, cost: s.cost + cost, turns: s.turns + 1 } });
   },
+  // Open the overlay and block the run until the user chooses; policyPickerSelect resolves it.
+  requestModelPolicy: () =>
+    new Promise<ModelPolicy>((resolve) => {
+      policyResolver = resolve;
+      set({ policyPicker: { sel: 0 } });
+    }),
 };
+
+// Resolver for the in-flight requestModelPolicy promise; the overlay's selection calls it.
+let policyResolver: ((p: ModelPolicy) => void) | null = null;
 
 // Sync the active model into state: catalog entry (for pricing), footer label, and context window.
 async function syncModel() {
@@ -163,6 +194,9 @@ export async function init() {
 function freshSession() {
   if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H"); // clear screen + scrollback, cursor home
   conversation = []; // a cleared screen means a cleared thread — the next run starts the model fresh
+  sessionId = newSessionId(); // a fresh thread is a new session on disk; the old one stays resumable
+  sessionTitle = "";
+  resetModelPolicy(); // a fresh session asks the model-policy question again on its next delegation
   state = { ...state, items: [{ id: nextId++, ...bannerItem() } as Item], gen: state.gen + 1, session: { prompt: 0, completion: 0, cost: 0, turns: 0 } };
   emit();
 }
@@ -182,6 +216,7 @@ async function runGoal(goal: string) {
   if (state.busy) return;
   const { content, attached, skipped } = attachImages(goal);
   const tag = attached.length ? `  ${c.dim(`📎 ${attached.length} image${attached.length > 1 ? "s" : ""}`)}` : "";
+  if (!sessionTitle) sessionTitle = goal.slice(0, 80);
   push({ kind: "user", text: `${goal}${tag}` });
   for (const s of skipped) push({ kind: "warn", text: `skipped ${s} — over 20MB image limit` });
   if (attached.length && currentInfo && !currentInfo.vision) {
@@ -198,6 +233,7 @@ async function runGoal(goal: string) {
   } finally {
     ui.endRun();
     set({ busy: false });
+    persist();
   }
 }
 
@@ -213,6 +249,7 @@ const HELP = [
   `  ${c.primary("/status")}           model, context window, working dir`,
   `  ${c.primary("/usage")}            tokens + estimated cost this session`,
   `  ${c.primary("/context")}          context-window usage right now`,
+  `  ${c.primary("/resume")}           reopen a past chat session (↑↓ choose, ⏎ resume, esc cancel)`,
   `  ${c.primary("/clear")}            clear the scrollback`,
   `  ${c.primary("/help")}             this list`,
   `  ${c.dim("exit · Ctrl-C")}     quit`,
@@ -257,6 +294,80 @@ export async function pickerSelect() {
   const chosen = p.items[p.sel];
   closePicker();
   if (chosen) await activate(chosen.id);
+}
+
+// --- the /resume picker (interactive list of past chat sessions, same keys as /model) ---
+
+// Rebuild visible scrollback from a saved thread: the user's lines and the assistant's prose replies.
+// Tool calls and internal turns are skipped — enough to read the past chat, while the full message
+// array (loaded into `conversation`) still gives the model the complete context on the next run.
+function replay(messages: OpenAI.ChatCompletionMessageParam[]): NewItem[] {
+  const out: NewItem[] = [];
+  for (const m of messages) {
+    if (m.role === "user") {
+      const text = typeof m.content === "string" ? m.content : "(image / multimodal message)";
+      out.push({ kind: "user", text });
+    } else if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) {
+      out.push({ kind: "info", lines: m.content.split("\n").map((l) => c.dim(l)) });
+    }
+  }
+  return out;
+}
+
+export function openResumePicker() {
+  const items = listSessions().filter((s) => s.id !== sessionId); // don't offer to resume the live one
+  if (!items.length) return push({ kind: "info", lines: [c.dim("no saved sessions yet — they're recorded as you chat")] });
+  set({ resumePicker: { items, sel: 0 } });
+}
+export const closeResumePicker = () => set({ resumePicker: null });
+export function resumePickerMove(delta: number) {
+  const rp = state.resumePicker;
+  if (!rp || !rp.items.length) return;
+  set({ resumePicker: { ...rp, sel: (rp.sel + delta + rp.items.length) % rp.items.length } });
+}
+export async function resumePickerSelect() {
+  const rp = state.resumePicker;
+  if (!rp) return;
+  const chosen = rp.items[rp.sel];
+  closeResumePicker();
+  if (!chosen) return;
+  const sess = loadSession(chosen.id);
+  if (!sess) return push({ kind: "info", lines: [c.yellow(`couldn't load session ${chosen.id}`)] });
+  conversation = sess.messages; // the model picks up the full thread; we show a readable subset
+  sessionId = sess.id;
+  sessionTitle = sess.title;
+  if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  const head: Item = { id: nextId++, ...bannerItem() } as Item;
+  const note: Item = { id: nextId++, kind: "info", lines: [c.green(`✔ resumed: ${sess.title}`)] };
+  const items = replay(sess.messages).map((it) => ({ id: nextId++, depth: 0, ...it }) as Item);
+  state = { ...state, items: [head, note, ...items], gen: state.gen + 1 };
+  emit();
+}
+
+// --- the first-delegation model-policy overlay (resolves the requestModelPolicy promise) ---
+
+export function policyPickerMove(delta: number) {
+  const pp = state.policyPicker;
+  if (!pp) return;
+  const n = POLICY_OPTIONS.length;
+  set({ policyPicker: { sel: (pp.sel + delta + n) % n } });
+}
+export function policyPickerSelect() {
+  const pp = state.policyPicker;
+  if (!pp) return;
+  const opt = POLICY_OPTIONS[pp.sel];
+  set({ policyPicker: null });
+  push({ kind: "info", lines: [c.green(`✔ subagent models: ${opt.label}`)] });
+  policyResolver?.(opt.value);
+  policyResolver = null;
+}
+// esc can't leave the run hanging on the unanswered prompt — default to the current model for all.
+export function policyPickerCancel() {
+  if (!state.policyPicker) return;
+  set({ policyPicker: null });
+  push({ kind: "info", lines: [c.dim("using the current model for all subagents")] });
+  policyResolver?.("parent");
+  policyResolver = null;
 }
 
 // --- the /colors picker (interactive list, same keys as /model) ---
@@ -401,6 +512,8 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
     }
     case "/setup":
       return openSetup();
+    case "/resume":
+      return openResumePicker();
     case "/clear":
       return freshSession();
     default:
@@ -416,6 +529,7 @@ export const COMMANDS = [
   { name: "/status", desc: "model, window, working dir" },
   { name: "/usage", desc: "tokens + cost this session" },
   { name: "/context", desc: "context-window usage" },
+  { name: "/resume", desc: "reopen a past chat session" },
   { name: "/clear", desc: "clear the scrollback" },
   { name: "/help", desc: "list commands" },
 ];

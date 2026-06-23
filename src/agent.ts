@@ -3,8 +3,9 @@
 import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
 import { chat, getContextWindow } from "./llm";
-import { schemasFor, dispatch, parseFinalAnswer, canSpawn, MAX_DEPTH, SUBAGENT_TOOLS, parseSpawnArgs, formatSubResult, type RunResult } from "./tools";
+import { schemasFor, dispatch, parseFinalAnswer, canSpawn, MAX_DEPTH, MAX_FANOUT, parseSpawnArgs, formatSubResult, type SpawnArgs, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, inputBudget } from "./context";
+import { getModelPolicy, setModelPolicy } from "./model_policy";
 import { loadMemory } from "./memory";
 import { thinkingVerb, toolVerb } from "./format";
 import type { UI } from "./ui";
@@ -50,26 +51,52 @@ function buildSystemPrompt(): string {
   return `${SYSTEM_RULES}\n\n## Environment\n${env}${memory ? `\n\n${memory}` : ""}`;
 }
 
-// `depth` is the delegation level: 0 = the top agent, ≥1 = a subagent spawned by spawn_agent. It scopes
-// the toolset (a subagent gets read-only tools and can't delegate again) and is incremented on each
-// spawn so recursion is bounded. Callers run normally by omitting it.
-// `history` is the live message array for an ongoing session: pass the same one across turns and the
-// model sees the whole conversation, not just this turn. Omit it (subagents, one-shots) for a clean
-// context. The system prompt is built once, on the first turn, so the cacheable head stays byte-identical.
-export async function run(goal: string | OpenAI.ChatCompletionContentPart[], ui: UI, depth = 0, history?: OpenAI.ChatCompletionMessageParam[]): Promise<RunResult> {
+// A UI that swallows a subagent's live chatter — used when several subagents run in parallel, where
+// interleaved per-tool output from all of them would be unreadable. The parent still shows each child's
+// start and its ✓/✗ result; warnings pass through so failures aren't silent.
+const quietUI = (ui: UI): UI => ({
+  thinking: () => {},
+  thought: () => {},
+  enterSubagent: () => {},
+  exitSubagent: () => {},
+  tool: () => {},
+  warn: ui.warn,
+  debug: () => {},
+  startRun: () => {},
+  endRun: () => {},
+  setModelLabel: () => {},
+  context: () => {},
+  usage: () => {},
+  requestModelPolicy: async () => "parent",
+});
+
+// `depth` is the delegation level: 0 = the top agent, ≥1 = a subagent. It scopes whether the run may
+// delegate again (bounded by MAX_DEPTH) and is incremented on each spawn. Callers run normally by
+// omitting it. `history` is the live message array for an ongoing session: pass the same one across
+// turns and the model sees the whole conversation. Omit it (one-shots) for a clean context. `opts`
+// overrides the model/effort for this run — a subagent assigned a different model passes it. The system
+// prompt is built once, on the first turn, so the cacheable head stays byte-identical.
+export async function run(
+  goal: string | OpenAI.ChatCompletionContentPart[],
+  ui: UI,
+  depth = 0,
+  history?: OpenAI.ChatCompletionMessageParam[],
+  opts?: { model?: string; effort?: string | null },
+): Promise<RunResult> {
   const messages: OpenAI.ChatCompletionMessageParam[] = history ?? [];
   if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
   messages.push({ role: "user", content: goal });
 
-  const schemas = schemasFor(depth); // depth scopes what this run may call (a subagent is read-only)
-  const allow = depth > 0 ? SUBAGENT_TOOLS : undefined; // enforced again at dispatch, not just by omission
+  const schemas = schemasFor(depth); // depth gates whether this run is offered spawn_agent
   const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
+  const subSessions = new Map<string, OpenAI.ChatCompletionMessageParam[]>(); // child histories kept for resume
+  let subCounter = 0; // names this run's subagents (sub-1, sub-2, …)
   let stall = 0; // consecutive turns with no real progress; trips STALL_LIMIT before MAX_TURNS
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     ui.thinking(true, thinkingVerb());
     const t0 = Date.now();
-    const res = await chat(messages, schemas);
+    const res = await chat(messages, schemas, opts);
     ui.thinking(false);
     const choice = res.choices?.[0];
     if (!choice) throw new Error("model returned no choices");
@@ -93,86 +120,131 @@ export async function run(goal: string | OpenAI.ChatCompletionContentPart[], ui:
     if (!msg.tool_calls?.length) return { success: true, summary: msg.content ?? "(no output)" };
 
     let progressed = false; // did this turn do real, new work? a productive turn resets the stall counter
-    for (const call of msg.tool_calls) {
-      // Every tool_call must get a matching tool result or the next request is rejected —
-      // even ones we can't run. A skipped call still needs its tombstone.
+    const calls = msg.tool_calls;
+    // Several spawn_agent calls in one turn run concurrently; when there's more than one, each child
+    // reports through a quiet UI so their tool output doesn't interleave into noise. A lone spawn keeps
+    // the live nested view. Independent subagents finish in the slowest one's time, not the sum.
+    const spawnCount = calls.filter((c) => c.type === "function" && c.function.name === "spawn_agent").length;
+    const parallel = spawnCount > 1;
+    const childUI = parallel ? quietUI(ui) : ui;
+
+    // First delegation of a session: ask the user once, here, before any subagent runs, how subagents
+    // should pick a model. The run pauses on the overlay until answered. Only the top agent asks (a
+    // subagent has no user); the choice is then read at every depth when launching a child.
+    if (depth === 0 && spawnCount > 0 && getModelPolicy() === null) {
+      setModelPolicy(await ui.requestModelPolicy());
+    }
+    const allowCustomModel = getModelPolicy() === "auto"; // "parent" ignores the agent's per-task model picks
+
+    // One result slot per call, filled in call order even though spawns finish out of order — every
+    // tool_call needs its matching result, and the result order must line up or the next request fails.
+    const results: (string | null)[] = new Array(calls.length).fill(null);
+    const pending: Promise<void>[] = []; // in-flight subagent runs
+    let terminal: RunResult | null = null; // set by final_answer or a repeat-stop; ends the run after this turn
+    let fanout = 0;
+
+    for (let idx = 0; idx < calls.length; idx++) {
+      const call = calls[idx];
       if (call.type !== "function") {
-        messages.push({ role: "tool", tool_call_id: call.id, content: `error: unsupported tool call type '${call.type}'` });
+        results[idx] = `error: unsupported tool call type '${call.type}'`;
         continue;
       }
 
       // No-progress guard: identical call (name + args) repeated = the model is stuck. Stop cheaply
-      // instead of feeding the loop turns until MAX_TURNS. Still push a result so the history stays valid.
+      // instead of feeding the loop turns until MAX_TURNS.
       const sig = `${call.function.name}(${call.function.arguments})`;
       const count = (seen.get(sig) ?? 0) + 1;
       seen.set(sig, count);
       if (count >= REPEAT_LIMIT) {
         const stop = `stopped: repeated ${call.function.name} with the same arguments ${count}×`;
-        messages.push({ role: "tool", tool_call_id: call.id, content: stop });
-        return { success: false, summary: stop };
+        results[idx] = stop;
+        terminal = { success: false, summary: stop };
+        break;
       }
 
-      // Terminal signal. A valid payload ends the run with structured data; a malformed one comes
-      // back as an error so the model can correct the shape (Task 4.1), backed by the repeat guard
-      // above and MAX_TURNS below. Truncated args fail JSON.parse here and take the same correction path.
+      // Terminal signal. A valid payload ends the run with structured data; a malformed one comes back
+      // as an error so the model can correct the shape. Truncated args fail JSON.parse and take that path.
       if (call.function.name === "final_answer") {
         try {
-          const answer = parseFinalAnswer(call.function.arguments);
-          messages.push({ role: "tool", tool_call_id: call.id, content: "ok" });
-          return answer;
+          terminal = parseFinalAnswer(call.function.arguments);
+          results[idx] = "ok";
+          break;
         } catch (e: any) {
-          messages.push({ role: "tool", tool_call_id: call.id, content: `error: ${e.message}` });
+          results[idx] = `error: ${e.message}`;
           continue;
         }
       }
 
-      // Delegation. Like final_answer this is intercepted, not dispatched: running it recurses into
-      // run() with the live UI and depth — which only exist here. The subagent works in its own message
-      // array (clean context) and only its summary crosses back, so the parent's history stays small.
+      // Delegation. Intercepted, not dispatched: running it recurses into run() with depth + 1. The
+      // subagent works in its own message array, kept in subSessions so the parent can resume it later;
+      // only its summary crosses back. A throwing child becomes a failure result, never a crash.
       if (call.function.name === "spawn_agent") {
         if (!canSpawn(depth)) {
-          // Defence-in-depth: a subagent isn't even shown this schema, so this only fires on a
-          // hallucinated call. Refuse as a result the model can recover from — never recurse past the floor.
           const blocked = `error: blocked: subagent depth limit (${MAX_DEPTH}) reached — do this part yourself`;
-          messages.push({ role: "tool", tool_call_id: call.id, content: blocked });
+          results[idx] = blocked;
           ui.tool(call.function.name, call.function.arguments, blocked);
           continue;
         }
-        let subGoal: string;
+        let sa: SpawnArgs;
         try {
-          subGoal = parseSpawnArgs(call.function.arguments).goal;
+          sa = parseSpawnArgs(call.function.arguments);
         } catch (e: any) {
-          messages.push({ role: "tool", tool_call_id: call.id, content: `error: ${e.message}` });
+          results[idx] = `error: ${e.message}`;
           continue;
         }
-        ui.enterSubagent(subGoal); // open the nested block; the child reports through the same ui, railed in
-        // Its own context; only the summary returns. A subagent that throws (e.g. the model call fails
-        // after retries) comes back as a failure result, never as an exception that kills the parent run.
-        let sub: RunResult;
-        try {
-          sub = await run(subGoal, ui, depth + 1);
-        } catch (e: any) {
-          sub = { success: false, summary: `subagent crashed: ${e.message ?? e}` };
+        if (++fanout > MAX_FANOUT) {
+          results[idx] = `error: too many subagents at once (limit ${MAX_FANOUT}) — spawn fewer or do some yourself`;
+          continue;
         }
-        const out = formatSubResult(sub);
-        ui.exitSubagent(out); // close the block with the ✓/✗ summary
-        messages.push({ role: "tool", tool_call_id: call.id, content: out });
-        progressed = true; // a completed delegation is real work — don't count it toward the stall guard
+        const subHistory = sa.resume_id ? subSessions.get(sa.resume_id) : [];
+        if (sa.resume_id && !subHistory) {
+          results[idx] = `error: no subagent session "${sa.resume_id}" to resume in this run`;
+          continue;
+        }
+        const id = sa.resume_id ?? `sub-${++subCounter}`;
+        const subModel = allowCustomModel ? sa.model : undefined; // "parent" policy → ignore the requested model
+        const subEffort = allowCustomModel ? sa.effort ?? null : null;
+        if (!parallel) ui.enterSubagent(subModel ? `${sa.goal}  ·  ${subModel}` : sa.goal);
+        progressed = true; // a delegation is real work, even if it ultimately fails
+        const i = idx;
+        const args = call.function.arguments;
+        pending.push(
+          (async () => {
+            let sub: RunResult;
+            try {
+              sub = await run(sa.goal, childUI, depth + 1, subHistory!, { model: subModel, effort: subEffort });
+            } catch (e: any) {
+              sub = { success: false, summary: `subagent crashed: ${e.message ?? e}` };
+            }
+            subSessions.set(id, subHistory!);
+            const out = formatSubResult(sub, id);
+            if (parallel) ui.tool("spawn_agent", args, out); // render as a completed entry; no live nesting
+            else ui.exitSubagent(out);
+            results[i] = out;
+          })(),
+        );
         continue;
       }
 
       ui.thinking(true, toolVerb(call.function.name));
-      const result = await dispatch(call.function.name, call.function.arguments, allow);
+      const result = await dispatch(call.function.name, call.function.arguments);
       ui.thinking(false);
-      messages.push({ role: "tool", tool_call_id: call.id, content: result });
+      results[idx] = result;
       ui.tool(call.function.name, call.function.arguments, result);
-
-      // A first-time, non-erroring read/write/edit/bash call is real progress (re-runs and plan-only
-      // turns don't count) — enough to clear the stall counter for this turn.
       if (count === 1 && !result.startsWith("error:") && PROGRESS_TOOLS.has(call.function.name)) {
         progressed = true;
       }
     }
+
+    if (parallel) ui.thinking(true, `running ${spawnCount} subagents`);
+    await Promise.allSettled(pending); // wait for all subagents; allSettled means one failing can't abandon the rest
+    if (parallel) ui.thinking(false);
+
+    // Every tool_call gets its matching result, in call order.
+    for (let idx = 0; idx < calls.length; idx++) {
+      messages.push({ role: "tool", tool_call_id: calls[idx].id, content: results[idx] ?? "error: tool call not processed" });
+    }
+    if (terminal) return terminal;
 
     // Stall guard: too many barren turns in a row means the model is looping or stuck on something it
     // can't crack. Stop with a useful message instead of grinding all the way to MAX_TURNS.

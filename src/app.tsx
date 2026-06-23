@@ -3,7 +3,7 @@
 // plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker } from "./store";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker, type ResumePicker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
 import { clipboardImageToTemp } from "./images";
 import { matchFiles } from "./tools/workspace";
@@ -137,6 +137,34 @@ function PickerView({ picker }: { picker: Picker }) {
   );
 }
 
+// The /resume picker: a scrolling list of past chat sessions (most recent first). Same keys as /model.
+function ResumePickerView({ picker }: { picker: ResumePicker }) {
+  const { items, sel } = picker;
+  const start = Math.max(0, Math.min(sel - Math.floor(VIEW / 2), Math.max(0, items.length - VIEW)));
+  const view = items.slice(start, start + VIEW);
+  const ago = (t: number) => {
+    const m = Math.round((Date.now() - t) / 60000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60);
+    return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+  };
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text>{`${c.primary("◉ resume a chat")}  ${c.dim("↑↓ choose · ⏎ resume · esc cancel")}`}</Text>
+      {view.map((s, i) => {
+        const active = start + i === sel;
+        const title = (s.title || "(untitled)").slice(0, 56);
+        return (
+          <Text key={s.id} color={active ? getPrimaryColor() : undefined}>
+            {`  ${active ? "›" : " "} ${title}  ${c.dim(`${ago(s.updated)} · ${s.cwd.replace(process.env.HOME ?? "~", "~")}`)}`}
+          </Text>
+        );
+      })}
+      {items.length > VIEW && <Text>{`  ${c.dim(`${sel + 1}/${items.length}`)}`}</Text>}
+    </Box>
+  );
+}
+
 // The /colors picker: each preset swatched in its own color, the active one marked. Same keys as /model.
 function ColorPickerView({ sel }: { sel: number }) {
   const cur = getPrimaryColor();
@@ -154,6 +182,22 @@ function ColorPickerView({ sel }: { sel: number }) {
         );
       })}
       <Text>{c.dim("  custom: /colors #rrggbb")}</Text>
+    </Box>
+  );
+}
+
+// The model-policy overlay, shown once on the first delegation. Same keys as /colors.
+function PolicyPickerView({ sel }: { sel: number }) {
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      <Text>{`${c.primary("◉ model policy for subagents")}  ${c.dim("↑↓ choose · ⏎ set · esc = current model")}`}</Text>
+      <Text>{c.dim("  asked once this session — how should delegated subagents pick a model?")}</Text>
+      {POLICY_OPTIONS.map((opt, i) => {
+        const active = i === sel;
+        const marker = active ? c.primary("›") : " ";
+        const label = active ? c.bold(opt.label) : opt.label;
+        return <Text key={opt.value}>{`  ${marker} ${label}`}</Text>;
+      })}
     </Box>
   );
 }
@@ -200,6 +244,22 @@ function Prompt() {
       if (key.downArrow) return pickerMove(1);
       if (key.backspace || key.delete) return void pickerFilter(s.picker.query.slice(0, -1));
       if (input && !key.ctrl && !key.meta) return void pickerFilter(s.picker.query + input);
+      return;
+    }
+    // Resume picker: arrows to move, enter to reopen the chosen session, esc to cancel.
+    if (s.resumePicker) {
+      if (key.escape) return closeResumePicker();
+      if (key.return) return void resumePickerSelect();
+      if (key.upArrow) return resumePickerMove(-1);
+      if (key.downArrow) return resumePickerMove(1);
+      return;
+    }
+    // Model-policy overlay: the run is paused waiting on this; enter sets it, esc defaults to parent.
+    if (s.policyPicker) {
+      if (key.escape) return policyPickerCancel();
+      if (key.return) return policyPickerSelect();
+      if (key.upArrow) return policyPickerMove(-1);
+      if (key.downArrow) return policyPickerMove(1);
       return;
     }
     // Color picker: arrows to move, enter to apply, esc to cancel (no typing — presets are few).
@@ -259,6 +319,8 @@ function Prompt() {
   });
 
   if (s.picker) return <PickerView picker={s.picker} />;
+  if (s.resumePicker) return <ResumePickerView picker={s.resumePicker} />;
+  if (s.policyPicker) return <PolicyPickerView sel={s.policyPicker.sel} />;
   if (s.colorPicker) return <ColorPickerView sel={s.colorPicker.sel} />;
   if (s.effortPicker) return <EffortPickerView sel={s.effortPicker.sel} />;
 

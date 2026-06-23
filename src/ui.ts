@@ -4,6 +4,7 @@
 import { homedir } from "node:os";
 import { setFooter, clearFooter, cleanup as screenCleanup } from "./screen";
 import type { ModelInfo } from "./llm";
+import type { ModelPolicy } from "./model_policy";
 import { c, wrap, visibleLen, termWidth, iconize, toolEntry, resultBody, bannerLines, subHeader, rail } from "./format";
 
 export { describeModel } from "./format";
@@ -25,6 +26,7 @@ export type UI = {
   setModelLabel: (label: string) => void; // the model line shown in the status
   context: (used: number, budget: number) => void; // live context-usage %
   usage: (promptTokens: number, completionTokens: number) => void; // per-turn token usage, for /usage
+  requestModelPolicy: () => Promise<ModelPolicy>; // ask the user, once per session, how subagents pick a model
 };
 
 // Print rows under the tool header with the ⎿ connector on the first line only — the rest align.
@@ -132,8 +134,9 @@ export function createUI(): UI {
     redrawFooter();
   };
   const usage = () => {}; // session usage tracking is an interactive (Ink) feature; no-op when scripted
+  const requestModelPolicy = async (): Promise<ModelPolicy> => "parent"; // no overlay when scripted — use the current model
 
-  return { thinking, thought, enterSubagent, exitSubagent, tool, warn, debug, startRun, endRun, setModelLabel, context, usage };
+  return { thinking, thought, enterSubagent, exitSubagent, tool, warn, debug, startRun, endRun, setModelLabel, context, usage, requestModelPolicy };
 }
 
 // On any exit reset the scroll region (so a Ctrl-C mid-run never leaves the terminal with a stuck

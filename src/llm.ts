@@ -46,22 +46,28 @@ function buildClient(p: Provider): OpenAI {
 }
 let client = buildClient(provider); // rebuilt by setModel when the active model's provider changes
 
-// One completion. Pass tools to let the model call them (tool_choice: auto).
+// One completion. Pass tools to let the model call them (tool_choice: auto). `opts` overrides the model
+// and reasoning effort for this one call — a subagent run on a different model goes through here. The
+// override reuses the active provider's client, so it assumes the chosen id is served by that provider
+// (true for an OpenRouter-only setup); a cross-provider override would need a client for that provider.
 export async function chat(
   messages: OpenAI.ChatCompletionMessageParam[],
   tools?: OpenAI.ChatCompletionTool[],
+  opts?: { model?: string; effort?: string | null },
 ) {
-  const base = { model, messages, ...(tools ? { tools, tool_choice: "auto" } : {}) };
+  const useModel = opts?.model ?? model;
+  const useEffort = opts && "effort" in opts ? opts.effort ?? null : effort;
+  const base = { model: useModel, messages, ...(tools ? { tools, tool_choice: "auto" } : {}) };
   const create = (extra: Record<string, unknown>) =>
     // cast: `reasoning` (OpenRouter) isn't in the SDK type
     client.chat.completions.create({ ...base, ...extra } as OpenAI.ChatCompletionCreateParamsNonStreaming);
   try {
-    return await create(reasoningParams(provider, effort)); // reasoning_effort / reasoning.effort, only when set
+    return await create(reasoningParams(provider, useEffort)); // reasoning_effort / reasoning.effort, only when set
   } catch (e: any) {
     // gpt-5.5/5.4 reject reasoning_effort alongside function tools on Chat Completions ("use /v1/responses").
     // Retry once without the effort knob so the call still lands — models that accept it (o-series, gpt-5.1)
     // never hit this path. Degrade the knob, not the request; the full fix is the Responses API.
-    if (effort && e?.status === 400 && /reasoning_effort/i.test(String(e?.message))) return await create({});
+    if (useEffort && e?.status === 400 && /reasoning_effort/i.test(String(e?.message))) return await create({});
     throw e;
   }
 }
