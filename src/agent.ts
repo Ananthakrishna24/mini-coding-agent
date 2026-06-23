@@ -2,11 +2,12 @@
 // until the model finishes (final_answer or plain reply), stalls out, or hits the turn ceiling.
 import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
-import { chat, getContextWindow } from "./llm";
+import { chat, getContextWindow, getProvider } from "./llm";
 import { schemasFor, dispatch, parseFinalAnswer, canSpawn, MAX_DEPTH, MAX_FANOUT, parseSpawnArgs, formatSubResult, type SpawnArgs, type RunResult } from "./tools";
 import { countMessages, overBudget, compact, inputBudget } from "./context";
 import { getModelPolicy, setModelPolicy } from "./model_policy";
 import { loadMemory } from "./memory";
+import { skillsPromptBlock } from "./skills";
 import { thinkingVerb, toolVerb } from "./format";
 import type { UI } from "./ui";
 
@@ -37,6 +38,15 @@ try {
   SYSTEM_RULES = readFileSync(new URL("./prompts/system.md", import.meta.url), "utf8").trim();
 }
 
+// GPT-5-series addendum (prompts/system.openai.md), appended only for the OpenAI provider — loaded the
+// same dual way as the base rules: inlined string in the dist build, file read in dev (tsx).
+let OPENAI_RULES: string;
+try {
+  OPENAI_RULES = ((await import("./prompts/system.openai.md")) as { default: string }).default.trim();
+} catch {
+  OPENAI_RULES = readFileSync(new URL("./prompts/system.openai.md", import.meta.url), "utf8").trim();
+}
+
 function buildSystemPrompt(): string {
   const env = [
     `Working directory: ${process.cwd()}`,
@@ -48,7 +58,15 @@ function buildSystemPrompt(): string {
   // notes) sit after the fixed rules, so the big cacheable prefix stays byte-identical across runs.
   // Empty when there's no AGENT.md, so a fresh project carries no dangling section.
   const memory = loadMemory();
-  return `${SYSTEM_RULES}\n\n## Environment\n${env}${memory ? `\n\n${memory}` : ""}`;
+  // GPT-5 gets its tuned addendum right after the shared rules (still before the changing env/memory tail,
+  // so the cacheable head stays stable within a session). Provider is fixed per session, so this branch is
+  // stable too. ponytail: a cross-provider subagent would still get the parent's provider here — the harness
+  // routes every call through one provider's client anyway (see llm.ts), so that case can't arise yet.
+  const rules = getProvider() === "openai" ? `${SYSTEM_RULES}\n\n${OPENAI_RULES}` : SYSTEM_RULES;
+  // Skills index sits in the cacheable head too (it's stable per session — skills don't change mid-run).
+  // Empty when there's no skills dir, so it adds nothing on a checkout without one.
+  const skills = skillsPromptBlock();
+  return `${rules}${skills ? `\n\n${skills}` : ""}\n\n## Environment\n${env}${memory ? `\n\n${memory}` : ""}`;
 }
 
 // A UI that swallows a subagent's live chatter — used when several subagents run in parallel, where

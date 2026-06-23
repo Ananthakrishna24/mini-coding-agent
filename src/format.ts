@@ -129,10 +129,12 @@ const VERB: Record<string, string> = {
   run_bash: "Bash",
   update_plan: "Plan",
   spawn_agent: "Agent",
+  read_skill: "Skill",
 };
 
 function displayArg(name: string, args: any): string {
   if (name === "run_bash") return clip(oneLine(String(args.command ?? "")), 56);
+  if (name === "read_skill") return String(args.name ?? "");
   if (typeof args.path === "string") return args.path;
   if (name === "update_plan") return Array.isArray(args.plan) ? `${args.plan.length} steps` : "";
   return clip(oneLine(JSON.stringify(args ?? {})), 56);
@@ -148,6 +150,7 @@ const BADGE_BG: Record<string, Color> = {
   run_bash: "bgYellowBright",
   update_plan: "bgMagentaBright",
   spawn_agent: "bgCyanBright",
+  read_skill: "bgWhiteBright",
 };
 const badge = (name: string, failed: boolean) => {
   const style: Color[] = [failed ? "bgRedBright" : BADGE_BG[name] ?? "bgGray", "black", "bold"];
@@ -175,6 +178,7 @@ const TOOL_GERUND: Record<string, string> = {
   edit_file: "Editing",
   run_bash: "Running",
   update_plan: "Planning",
+  read_skill: "Loading skill",
 };
 export const toolVerb = (name: string) => TOOL_GERUND[name] ?? name;
 
