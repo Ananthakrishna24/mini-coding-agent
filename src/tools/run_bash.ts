@@ -9,9 +9,6 @@ const execFileAsync = promisify(execFile);
 const TIMEOUT_MS = 120_000; // real builds/test suites run long; kill a hung command, don't stall the run
 
 export const run_bash: Tool = {
-  // ponytail: commands pass the deny-list gate in dispatch (permissions.ts) before they reach here,
-  // but the shell itself is still unsandboxed — the gate is an accident-fence, not a jail. Real
-  // containment = an OS sandbox (bubblewrap/Landlock, Seatbelt) with no net / no writes outside the tree.
   schema: {
     type: "function",
     function: {

@@ -17,8 +17,8 @@ export async function readTextFile(abs: string): Promise<string> {
   }
 
   const text = await fs.readFile(abs, "utf8");
-  // ponytail: NUL-byte heuristic, not libmagic. UTF-8 text never contains NUL; binaries (images,
-  // compiled output, archives) do — reject them so their decoded garbage can't pollute the context.
+  // NUL-byte heuristic, not libmagic. UTF-8 text never contains NUL; binaries (images, compiled
+  // output, archives) do — reject them so their decoded garbage can't pollute the context.
   if (text.includes(NUL)) {
     throw new Error("file looks binary (contains NUL bytes) — read_file only handles UTF-8 text; use run_bash for binary files");
   }

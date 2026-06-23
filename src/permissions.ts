@@ -7,11 +7,9 @@ export type Decision = { allow: true } | { allow: false; reason: string };
 
 // Commands we never run. Each is irreversible (no undo) or escapes the workspace.
 //
-// ponytail: a regex deny-list is an accident-fence, not a sandbox. It raises the cost of the
-// model fat-fingering a destructive command; it does NOT stop a determined injected attacker
-// — `rm -fr`, `find . -delete`, `base64 -d | sh` all reach the same end and slip the list.
-// Real containment is an OS sandbox (Linux: bubblewrap + Landlock; macOS: Seatbelt): no
-// network, no writes outside the tree, no ~/.ssh. That's the named upgrade — see notes Task 4.2.
+// A regex deny-list is an accident-fence, not a sandbox. It raises the cost of the model
+// fat-fingering a destructive command; it does NOT stop a determined injected attacker.
+// Real containment is an OS sandbox (bubblewrap/Landlock, Seatbelt) with no net / no writes outside the tree.
 const DENY: { pattern: RegExp; reason: string }[] = [
   { pattern: /\brm\s+-\w*r/i,                              reason: "recursive delete (rm -r)" },
   { pattern: /\bsudo\b/i,                                  reason: "privilege escalation (sudo)" },

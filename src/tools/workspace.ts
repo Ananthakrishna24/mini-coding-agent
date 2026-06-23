@@ -5,8 +5,7 @@ import fs from "node:fs";
 
 export const WORKSPACE = process.cwd();
 
-// Heavy/noise dirs the @-file picker never walks into. ponytail: hardcoded skip list, not a .gitignore
-// parser — add a dir here if a repo needs it.
+// Heavy/noise dirs the @-file picker never walks into. Hardcoded skip list — add a dir here if needed.
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".cache", "coverage"]);
 
 let fileCache: string[] | null = null;
@@ -67,7 +66,7 @@ export function resolveInWorkspace(p: string): string {
   if (abs !== WORKSPACE && !abs.startsWith(WORKSPACE + path.sep)) {
     throw new Error(`path escapes workspace: ${p}`);
   }
-  // ponytail: this checks the path string, not the real (symlink-resolved) target — a symlink inside
-  // the workspace could still point out. Local CLI = user's own risk; symlink/sandbox gating is Task 4.2.
+  // Checks the path string, not the real (symlink-resolved) target — a symlink inside the workspace
+  // could still point out. Local CLI = user's own risk; symlink/sandbox gating is a future task.
   return abs;
 }

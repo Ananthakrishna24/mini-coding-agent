@@ -228,7 +228,7 @@ async function activate(id: string) {
   if (info?.reasoning) openEffortPicker(); // a reasoning model: ask for the effort level next
 }
 
-// --- the /model picker (interactive list, like claude-code's /model) ---
+// --- the /model picker (interactive list) ---
 
 // Re-run the search for the picker's current query and reset the highlight. searchModels caches the
 // catalog after the first fetch, so retyping the filter is effectively instant.

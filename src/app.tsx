@@ -1,6 +1,6 @@
-// The interactive Ink UI: a claude-code-style chat. Scrollback (banner, your lines, tool calls,
-// results) lives in <Static> so it commits once and scrolls naturally; the live region below holds
-// the plan/status footer and the input with its "/" command menu. State comes from store.ts.
+// The interactive Ink UI: a chat interface. Scrollback (banner, your lines, tool calls, results)
+// lives in <Static> so it commits once and scrolls naturally; the live region below holds the
+// plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker } from "./store";

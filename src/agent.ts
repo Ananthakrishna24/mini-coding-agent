@@ -28,7 +28,7 @@ const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "run_bas
 // turns, and the cache match stops at the first byte that differs.
 // The published build inlines the prompt as a minified JS string (tsup `--loader .md=text`) so the
 // dist ships no plaintext system.md; dev (tsx) can't load .md, so it falls back to reading the file.
-// ponytail: cosmetic deterrent only — the prompt is sent to the LLM, so a proxy recovers it regardless.
+// Cosmetic deterrent only — the prompt is sent to the LLM, so a proxy recovers it regardless.
 let SYSTEM_RULES: string;
 try {
   SYSTEM_RULES = ((await import("./prompts/system.md")) as { default: string }).default.trim();
@@ -78,7 +78,7 @@ export async function run(goal: string | OpenAI.ChatCompletionContentPart[], ui:
 
     // Reasoning models return their chain-of-thought in `reasoning` (an OpenRouter extension, not in the
     // SDK types). Surface it as a one-line "thought for Ns" — only when the model actually reasoned, so
-    // non-reasoning models stay quiet. ponytail: times the whole call, not the reasoning span alone (no
+    // non-reasoning models stay quiet. Times the whole call, not the reasoning span alone (no
     // streaming to separate them); switch to streamed deltas if that split ever matters.
     const reasoning = (msg as any).reasoning;
     if (typeof reasoning === "string" && reasoning.trim()) ui.thought(Math.round((Date.now() - t0) / 1000));

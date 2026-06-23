@@ -60,7 +60,7 @@ export async function chat(
   } catch (e: any) {
     // gpt-5.5/5.4 reject reasoning_effort alongside function tools on Chat Completions ("use /v1/responses").
     // Retry once without the effort knob so the call still lands — models that accept it (o-series, gpt-5.1)
-    // never hit this path. ponytail: degrade the knob, not the request; the full fix is the Responses API.
+    // never hit this path. Degrade the knob, not the request; the full fix is the Responses API.
     if (effort && e?.status === 400 && /reasoning_effort/i.test(String(e?.message))) return await create({});
     throw e;
   }
@@ -119,8 +119,8 @@ async function fetchProviderModels(p: Provider): Promise<ModelInfo[]> {
 }
 
 // Catalog across every provider we have a key for, so /model lists them all at once. A provider that
-// fails (down, bad key) is swallowed so it can't hide the others. ponytail: ids are assumed unique
-// across providers (OpenRouter's "a/b" ids don't collide with OpenAI's bare ids); first match wins if not.
+// fails (down, bad key) is swallowed so it can't hide the others. IDs are assumed unique across
+// providers (OpenRouter's "a/b" ids don't collide with OpenAI's bare ids); first match wins if not.
 export async function fetchModels(): Promise<ModelInfo[]> {
   if (catalog) return catalog;
   const lists = await Promise.all(availableProviders().map((p) => fetchProviderModels(p).catch(() => [] as ModelInfo[])));

@@ -3,6 +3,8 @@
 // and the Ink UI (app.tsx, interactive) render identically. Color is util.styleText (Node ≥20),
 // gated on a TTY so piped/CI/NO_COLOR output stays plain and grep-able.
 import { styleText } from "node:util";
+import { createRequire } from "node:module";
+const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -136,9 +138,9 @@ function displayArg(name: string, args: any): string {
   return clip(oneLine(JSON.stringify(args ?? {})), 56);
 }
 
-// Tool badge: an uppercase, background-filled chip ("READ" on color) — claude-code style, so the log
-// scans by colored shape. Per-tool hue; failures go red, unknown tools fall back to gray. Black text on
-// a bright fill reads on any terminal theme.
+// Tool badge: an uppercase, background-filled chip ("READ" on color) so the log scans by colored shape.
+// Per-tool hue; failures go red, unknown tools fall back to gray. Black text on a bright fill reads on
+// any terminal theme.
 const BADGE_BG: Record<string, Color> = {
   read_file: "bgBlueBright",
   write_file: "bgGreenBright",
@@ -317,11 +319,11 @@ function artRow(line: string): { t: string; s: (x: string) => string } {
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
-  const title = "MiniCode";
+  const title = `MiniCode v${VERSION}`;
   const art = minionArt.map(artRow);
   const artW = Math.max(...art.map((a) => a.t.length));
 
-  // The welcome text, set beside the mascot (claude-code style) rather than stacked under it.
+  // The welcome text, set beside the mascot rather than stacked under it.
   const text: { t: string; s?: (x: string) => string }[] = [
     { t: `model    ${info?.id ?? id}` },
     ...(info
@@ -349,7 +351,7 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
   // Blank padding rows top and bottom so the art breathes evenly inside the frame.
   const lines = ["", ...body, ""];
 
-  // Full-width box: the frame extends end to end (claude-code style), content left-aligned inside.
+  // Full-width box: the frame extends end to end, content left-aligned inside.
   // Measure *visible* width so ANSI colour codes don't throw the right border off. -6 accounts for
   // the 2-space indent in the Ink UI + the "│ " / " │" borders on each side.
   const contentW = Math.max(...lines.map(visibleLen));

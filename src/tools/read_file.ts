@@ -37,7 +37,6 @@ export const read_file: Tool = {
       throw new Error("read_file: 'limit' must be a positive integer");
     }
 
-    // ponytail: a trailing newline yields one empty last "line"; harmless for navigation, not worth trimming.
     const lines = text.split("\n");
     const start = from - 1;
     const end = typeof limit === "number" ? start + limit : undefined;

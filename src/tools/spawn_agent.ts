@@ -22,7 +22,7 @@ export const canSpawn = (depth: number): boolean => depth < MAX_DEPTH;
 // editor no human approved — least privilege, the same instinct as the permissions layer. Both the
 // schema list (the child isn't shown the rest) and dispatch's allow-set (a hallucinated write is
 // blocked) enforce this.
-// ponytail: read-only is the only role for now; thread an allow-set param through spawn_agent if a
+// Read-only is the only role for now; thread an allow-set param through spawn_agent if a
 // delegated task ever genuinely needs to write.
 export const SUBAGENT_TOOLS = new Set(["read_file", "run_bash"]);
 
