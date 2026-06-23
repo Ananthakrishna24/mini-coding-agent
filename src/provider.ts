@@ -40,6 +40,12 @@ export function openaiReasons(id: string): boolean {
   return /^o\d/.test(id) || /^gpt-5/.test(id);
 }
 
+export function openaiVision(id: string): boolean {
+  if (/^gpt-3\.5/.test(id)) return false;
+  if (/^o[13]-mini/.test(id)) return false;
+  return true;
+}
+
 // Decide which provider to use from the environment. Rule:
 //   1. an explicit PROVIDER wins (but only if its key is actually present);
 //   2. otherwise infer from whichever key is set;

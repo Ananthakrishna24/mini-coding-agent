@@ -274,6 +274,7 @@ export function describeModel(info: ModelInfo | undefined, id: string): string {
   const parts = [short];
   if (info.context) parts.push(fmtTokens(info.context));
   if (info.promptPrice || info.completionPrice) parts.push(`${fmtPrice(info.promptPrice)}/${fmtPrice(info.completionPrice)} per 1M`);
+  if (info.vision) parts.push("👁");
   parts.push(c.dim(info.provider));
   return parts.join(" · ");
 }

@@ -5,6 +5,7 @@ import type OpenAI from "openai";
 import { run } from "./agent";
 import { getModel, setModel, modelInfo, searchModels, getContextWindow, getEffort, setEffort, resetCatalog, type ModelInfo } from "./llm";
 import { applyEnvFile } from "./onboarding";
+import { attachImages } from "./images";
 import { inputBudget } from "./context";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
@@ -179,12 +180,18 @@ function refreshBanner() {
 // Run a goal through the agent, streaming events into the store. One run at a time (busy guard).
 async function runGoal(goal: string) {
   if (state.busy) return;
-  push({ kind: "user", text: goal });
+  const { content, attached, skipped } = attachImages(goal);
+  const tag = attached.length ? `  ${c.dim(`📎 ${attached.length} image${attached.length > 1 ? "s" : ""}`)}` : "";
+  push({ kind: "user", text: `${goal}${tag}` });
+  for (const s of skipped) push({ kind: "warn", text: `skipped ${s} — over 20MB image limit` });
+  if (attached.length && currentInfo && !currentInfo.vision) {
+    return push({ kind: "warn", text: `${getModel()} doesn't accept image input — switch to a vision model with /model, then resend` });
+  }
   set({ busy: true });
   ui.startRun();
   const t0 = Date.now();
   try {
-    const r = await run(goal, ui, 0, conversation); // same array every turn = the model keeps the thread
+    const r = await run(content, ui, 0, conversation); // same array every turn = the model keeps the thread
     push({ kind: "result", success: r.success, summary: r.summary, ms: Date.now() - t0 });
   } catch (e: any) {
     push({ kind: "result", success: false, summary: `agent failed: ${e.message ?? e}`, ms: Date.now() - t0 });
@@ -209,6 +216,7 @@ const HELP = [
   `  ${c.primary("/clear")}            clear the scrollback`,
   `  ${c.primary("/help")}             this list`,
   `  ${c.dim("exit · Ctrl-C")}     quit`,
+  `  ${c.dim("tip: Ctrl-V pastes a copied image, or put an image path in your message (png/jpg/gif/webp)")}`,
 ];
 
 async function activate(id: string) {

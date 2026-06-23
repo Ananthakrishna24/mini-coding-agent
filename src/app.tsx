@@ -5,6 +5,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
+import { clipboardImageToTemp } from "./images";
 import { Onboarding } from "./onboarding";
 
 const indent = (s: string) => `  ${s}`;
@@ -208,6 +209,12 @@ function Prompt() {
       return;
     }
     if (busy) return; // one run at a time — ignore typing while the agent works
+    if (key.ctrl && (input === "v" || input === "\x16")) {
+      void clipboardImageToTemp().then((p) => {
+        if (p) setBuf((b) => `${b}${b && !b.endsWith(" ") ? " " : ""}${p} `);
+      });
+      return;
+    }
     if (key.return) {
       // With the "/" menu open, Enter runs the highlighted command (so "/mo"+⏎ → /model), not the
       // half-typed text. Otherwise submit what's typed.

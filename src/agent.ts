@@ -48,7 +48,7 @@ function buildSystemPrompt(): string {
 // `history` is the live message array for an ongoing session: pass the same one across turns and the
 // model sees the whole conversation, not just this turn. Omit it (subagents, one-shots) for a clean
 // context. The system prompt is built once, on the first turn, so the cacheable head stays byte-identical.
-export async function run(goal: string, ui: UI, depth = 0, history?: OpenAI.ChatCompletionMessageParam[]): Promise<RunResult> {
+export async function run(goal: string | OpenAI.ChatCompletionContentPart[], ui: UI, depth = 0, history?: OpenAI.ChatCompletionMessageParam[]): Promise<RunResult> {
   const messages: OpenAI.ChatCompletionMessageParam[] = history ?? [];
   if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
   messages.push({ role: "user", content: goal });

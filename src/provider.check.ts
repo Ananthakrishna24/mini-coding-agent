@@ -1,6 +1,6 @@
 // Offline self-check for provider resolution + .env merge — no model/network. Run: npm run check
 import assert from "node:assert/strict";
-import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons } from "./provider";
+import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, openaiVision } from "./provider";
 
 // --- resolveProvider ---
 
@@ -106,6 +106,13 @@ for (const id of ["o1", "o3-mini", "o4", "gpt-5", "gpt-5.5"]) {
 }
 for (const id of ["gpt-4o", "gpt-4.1", "chatgpt-4o-latest"]) {
   assert.ok(!openaiReasons(id), `${id} is not a reasoning model`);
+}
+
+for (const id of ["gpt-4o", "gpt-4.1", "gpt-5.5", "o3", "o4-mini", "chatgpt-4o-latest"]) {
+  assert.ok(openaiVision(id), `${id} accepts image input`);
+}
+for (const id of ["gpt-3.5-turbo", "o1-mini", "o3-mini"]) {
+  assert.ok(!openaiVision(id), `${id} is text-only`);
 }
 
 console.log("provider.check.ts ok");
