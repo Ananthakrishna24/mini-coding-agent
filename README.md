@@ -1,37 +1,73 @@
-# mini-coding-agent
+<p align="center">
+  <img src="minicode.png" alt="MiniCode banner" width="600">
+</p>
 
-A minimal terminal coding agent: an LLM wrapped in a runtime loop that reads files,
-edits code, and runs commands to work through a task in a repo. Built from the model
-I/O layer up.
+<h1 align="center">MiniCode</h1>
 
-## Stack
-- **TypeScript**, run directly with [`tsx`](https://github.com/privatenumber/tsx) — no build step.
-- Model access via [OpenRouter](https://openrouter.ai); default model `deepseek/deepseek-v4-flash`.
-- Native only — no CLI/color/spinner dependencies (`util.styleText`, `readline/promises`).
+<p align="center">
+<em>Every coding agent started small, then drowned in plugins, configs, and abstractions.</em><br>
+<strong>MiniCode is what they were before the bloat.</strong><br><br>
+A whole agent you can read in an afternoon — reads files, writes code, runs commands,<br>
+remembers, spawns helpers — everything the big ones do, none of the weight they carry.
+</p>
 
-## Setup
+```
+⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣴⣶⣶⣶⣤⠀⢀⣠⣤⣤⣤⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⢀⣴⣿⣿⡿⣿⠿⠟⠛⠛⠛⠟⠛⠻⠾⣯⣛⠿⣷⢦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⣠⣯⠞⠋⠁⡴⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⡟⠺⣿⣽⣆⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⢀⡼⢻⠏⠀⠀⠀⠀⠀⠀⠀⣀⠤⠴⠒⠚⠛⠒⠲⠤⣄⡀⠈⠻⣏⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⡞⠀⠀⠀⠀⠀⠀⠀⢀⡾⠋⠀⣀⡴⠖⠛⠛⠛⠛⠶⣤⡉⢳⡀⠘⣆⠀⠀⠀⠀⠀⠀⠀
+⠀⣸⠁⠀⠀⠀⠀⠀⠀⢠⠏⠀⢠⡾⠋⠀⠀⠀⠀⠀⠀⠀⠀⠹⣦⠹⡄⠸⡄⠀⠀⠀⠀⠀⠀
+⢀⣏⡀⠀⣀⣀⣀⣠⣴⡟⠀⢠⡟⠀⠀⠀⠀⠀⠀⠀⣶⡿⢿⡆⠘⣇⢹⣾⣿⡄⠀⠀⠀⠀⠀
+⢸⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⢸⡇⠀⠀⠀⠀⠀⠀⠀⠻⣿⡾⠇⠀⣿⠈⡿⣿⠃⠀⠀⠀⠀⠀
+⠈⢻⠛⠛⠛⠛⠛⠻⢼⣿⠀⠘⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡏⢸⠃⢸⠀⠀⠀⠀⠀⠀
+⠀⢸⠀⠀⠀⠀⠀⠀⠀⠈⢧⠀⠹⣧⡀⠀⠀⠀⠀⠀⠀⠀⠀⣠⠟⢠⠏⠀⢸⠀⠀⠀⠀⠀⠀
+⠀⠘⡇⠀⠀⠀⠀⠀⠀⠀⠀⠳⣄⡈⠻⢦⣤⣀⣀⣀⣠⡴⠞⢁⣴⠋⠀⠀⢸⡇⠀⠀⠀⠀⠀
+⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠒⠤⠤⣤⣭⣤⡤⠤⠚⠉⠀⠀⠀⠀⠈⡇⠀⠀⠀⠀⠀
+⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠀⠀⢀⡀⠀⠀⠀⠀⣹⡆⠀⠀⠀⠀
+⠀⢀⣇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠲⠤⠤⠤⠤⠤⠤⠒⠉⠀⠀⠀⠀⣰⣿⣷⠀⠀⠀⠀
+⠀⠸⣿⣷⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⣴⣿⣿⡿⡀⠀⠀⠀
+⠀⠀⣿⣿⣿⣿⣶⣤⣀⣀⣀⣀⣀⣀⣀⣀⣠⣤⣤⣤⣤⣶⣶⣾⣿⣿⡟⢙⡿⠋⣄⠹⡄⠀⠀
+⠀⢰⠃⠈⠙⠿⣿⣿⡟⠛⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⣿⣿⣿⣿⣿⣿⣿⠀⠀⢸⠀⢳⡀⠀
+⢠⡏⠀⢠⠀⠀⠀⠹⣷⣾⣿⣿⣿⣿⣿⣼⣿⡿⠛⠻⢿⣿⣿⣿⣿⣿⣿⣿⡇⠀⣸⣀⠈⣧⠀
+⡾⠀⢠⣯⠀⠀⠀⠀⢿⣿⣿⣿⣿⣿⣿⢿⣿⡀⠿⠟⣩⣿⣏⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣼⡀
+⡇⢀⣼⣿⣤⣤⣤⣤⣼⣿⣿⣿⣿⣿⣿⣯⣿⣿⠶⣾⣟⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠁
+⣧⡀⠀⣹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀⠀
+⠈⠉⠓⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠋⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠉⠻⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⢿⣿⣿⣿⣿⣿⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⡇⠈⢿⣿⣿⣿⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡿⠿⠿⠟⠛⠛⠁⠀⠘⠿⣿⡿⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+```
+
+## Install
+
 ```bash
-npm install
-cp .env.example .env   # then add your OPENROUTER_API_KEY
+npm install -g myminicode
 ```
 
-## Run
+Then run anywhere:
+
 ```bash
-npm run dev                       # interactive chat — type a goal, 'exit' to quit
-npm run dev -- "fix the failing test"   # one-shot — runs once, exits with a real code
-DEBUG=1 npm run dev               # also print per-turn context-budget lines
-npm run check                     # offline self-checks (no model/network)
+minicode                          # interactive chat
+minicode "fix the failing test"   # one-shot
 ```
 
-## Layout
-```
-src/
-  index.ts            CLI shell — interactive REPL + one-shot
-  agent.ts            the agent loop (model → tools → results → repeat)
-  llm.ts              OpenRouter client + chat helper
-  context.ts          token accounting + history compaction
-  permissions.ts      safety gate run before every tool call
-  ui.ts               terminal color/spinner/render (native)
-  prompts/system.md   the system prompt (standing orders), loaded at startup
-  tools/              one file per tool; tools/index.ts assembles + dispatches
+## Providers
+
+| Provider | Status |
+|---|---|
+| **OpenRouter** | ready |
+| **OpenAI** | ready |
+| **Anthropic** | ready |
+| **Chinese models** (DeepSeek, Qwen, Kimi…) | coming soon |
+
+Drop in an API key and go — switch models anytime with `/model`.
+
+## Usage
+
+```bash
+minicode                                # interactive chat
+minicode "fix the failing test"         # one-shot — runs once, exits
+minicode "add auth to the API"          # multi-step task in your repo
+DEBUG=1 minicode                        # print per-turn context-budget lines
 ```
