@@ -37,9 +37,11 @@ export function loadMemory(dir: string = process.cwd()): string {
 
   // Provenance + the verify caveat sit right next to the data: the model knows which file to edit, and
   // that a note is a hint to check against the code, not gospel.
+  // XML-fenced so the model reads this user-controlled file as data, not as fresh instructions to obey.
   return (
-    `## Memory\n` +
+    `<memory>\n` +
     `Project notes from earlier runs, loaded from ${MEMORY_FILE}. Treat them as hints and ` +
-    `verify against the current code before relying on one.\n\n${text}`
+    `verify against the current code before relying on one.\n\n${text}\n` +
+    `</memory>`
   );
 }

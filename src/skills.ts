@@ -54,13 +54,13 @@ export function skillsPromptBlock(): string {
   const skills = listSkills();
   if (!skills.length) return "";
   const rows = skills.map((s) => `- **${s.name}** — ${s.description}`).join("\n");
-  return `## Skills
-
+  return `<skills>
 Curated playbooks for specific kinds of work. When a task matches one (UI/visual work, UX/product
 decisions, …), load it with \`read_skill\` first and follow it — just the relevant one. Skip this for
 tasks no skill covers.
 
-${rows}`;
+${rows}
+</skills>`;
 }
 
 // Body of skills/<name>/SKILL.md for read_skill. `name` is untrusted model input: validate against the

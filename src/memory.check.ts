@@ -18,7 +18,8 @@ assert.equal(loadMemory(dir), "", "blank AGENT.md yields no memory section");
 // present file → wrapped section with provenance + the actual content
 fs.writeFileSync(file, "Build with `npm run check`.");
 const loaded = loadMemory(dir);
-assert.match(loaded, /^## Memory\n/, "starts with the Memory heading");
+assert.match(loaded, /^<memory>\n/, "opens with the memory data-fence");
+assert.match(loaded, /<\/memory>$/, "closes the memory data-fence");
 assert.match(loaded, /loaded from AGENT\.md/, "names the source file so the model knows what to edit");
 assert.match(loaded, /verify against the current code/, "carries the don't-trust-blindly caveat");
 assert.match(loaded, /Build with `npm run check`\./, "includes the file's content");

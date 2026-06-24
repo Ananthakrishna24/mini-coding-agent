@@ -66,7 +66,10 @@ function buildSystemPrompt(): string {
   // Skills index sits in the cacheable head too (it's stable per session — skills don't change mid-run).
   // Empty when there's no skills dir, so it adds nothing on a checkout without one.
   const skills = skillsPromptBlock();
-  return `${rules}${skills ? `\n\n${skills}` : ""}\n\n## Environment\n${env}${memory ? `\n\n${memory}` : ""}`;
+  // Injected, variable blocks are XML-fenced a clear data-vs-rules
+  // boundary the model parses reliably, and — since memory/skills carry user-controlled content — a
+  // fence that keeps that content read as data, not as new instructions. Standing rules stay Markdown.
+  return `${rules}${skills ? `\n\n${skills}` : ""}\n\n<environment>\n${env}\n</environment>${memory ? `\n\n${memory}` : ""}`;
 }
 
 // A UI that swallows a subagent's live chatter — used when several subagents run in parallel, where

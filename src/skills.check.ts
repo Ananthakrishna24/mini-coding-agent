@@ -6,20 +6,21 @@ import { listSkills, skillsPromptBlock, readSkill } from "./skills";
 
 const skills = listSkills();
 
-// The two seeded skills are discovered, each with a non-empty description.
-for (const name of ["frontend-design", "design-thinking"]) {
+// The seeded skill is discovered, with a non-empty description.
+for (const name of ["make-interfaces-feel-better"]) {
   const s = skills.find((x) => x.name === name);
   assert.ok(s, `skill ${name} is discovered`);
   assert.ok(s!.description.length > 0, `skill ${name} has a description`);
 }
 
-// The prompt block lists every discovered skill under a Skills heading.
+// The prompt block lists every discovered skill inside a skills data-fence.
 const block = skillsPromptBlock();
-assert.match(block, /## Skills/, "prompt block has a Skills heading");
+assert.match(block, /^<skills>/, "prompt block opens with the skills data-fence");
+assert.match(block, /<\/skills>$/, "prompt block closes the skills data-fence");
 for (const s of skills) assert.ok(block.includes(s.name), `prompt block lists ${s.name}`);
 
 // read_skill returns the full body for a real skill...
-assert.match(readSkill("frontend-design"), /# Frontend Design/, "read_skill returns the skill body");
+assert.match(readSkill("make-interfaces-feel-better"), /# Details that make interfaces feel better/, "read_skill returns the skill body");
 
 // ...and refuses anything outside the known set — including path traversal, absolute paths, non-strings.
 for (const bad of ["../package", "../../etc/passwd", "/etc/passwd", "nope", "", 42 as any]) {
