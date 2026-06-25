@@ -10,6 +10,7 @@ import { loadMemory } from "./memory";
 import { skillsPromptBlock } from "./skills";
 import { thinkingVerb, toolVerb } from "./format";
 import type { UI } from "./ui";
+import type { Coord, Role } from "./minions"; // type-only: erased at build, so no import cycle with minions.ts
 
 // Loop guards, outermost to innermost:
 //  - MAX_TURNS: absolute ceiling so a run is always bounded (override with AGENT_MAX_TURNS). High on
@@ -102,13 +103,16 @@ export async function run(
   ui: UI,
   depth = 0,
   history?: OpenAI.ChatCompletionMessageParam[],
-  opts?: { model?: string; effort?: string | null },
+  opts?: { model?: string; effort?: string | null; agentId?: string; role?: Role },
+  coord?: Coord, // set in /minions mode: routes the coordination tools and picks the role's toolset
 ): Promise<RunResult> {
   const messages: OpenAI.ChatCompletionMessageParam[] = history ?? [];
   if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
   messages.push({ role: "user", content: goal });
 
-  const schemas = schemasFor(depth); // depth gates whether this run is offered spawn_agent
+  const myId = opts?.agentId; // /minions mode: this agent's id on the message bus
+  // In /minions mode the toolset is the role's set (gru vs overseer/minion); otherwise depth-gated as before.
+  const schemas = coord && opts?.role ? coord.schemasForRole(opts.role) : schemasFor(depth);
   const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
   const subSessions = new Map<string, OpenAI.ChatCompletionMessageParam[]>(); // child histories kept for resume
   let subCounter = 0; // names this run's subagents (sub-1, sub-2, …)
@@ -169,6 +173,22 @@ export async function run(
       if (call.type !== "function") {
         results[idx] = `error: unsupported tool call type '${call.type}'`;
         continue;
+      }
+
+      // /minions coordination tools (spawn_minion, send/wait message, claim_file, …). Intercepted like
+      // spawn_agent — they need the live coordinator and this agent's id. Handled BEFORE the repeat guard
+      // because polling wait_message with identical (empty) args is legitimate, not a stuck loop.
+      // coord.handle returns null for any non-minion tool, so normal runs (coord undefined) skip this.
+      if (coord) {
+        const r = await coord.handle(call.function.name, call.function.arguments, myId!);
+        if (r !== null) {
+          results[idx] = r;
+          ui.tool(call.function.name, call.function.arguments, r);
+          // Spawning a unit or exchanging a signal is real coordination — reset the stall counter so a
+          // supervisor patiently waiting on its units isn't read as stuck (MAX_TURNS still caps the run).
+          if (call.function.name === "spawn_minion" || call.function.name === "wait_message") progressed = true;
+          continue;
+        }
       }
 
       // No-progress guard: identical call (name + args) repeated = the model is stuck. Stop cheaply

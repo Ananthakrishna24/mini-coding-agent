@@ -89,6 +89,7 @@ let state: State = {
 let conversation: OpenAI.ChatCompletionMessageParam[] = [];
 let sessionId = newSessionId(); // this chat's id on disk; a new one per /clear or resume
 let sessionTitle = ""; // first user line, shown in the /resume list
+let lastWasMinions = false; // last top-level run was a /minions team → a bare "continue" resumes it, not a fresh single agent
 
 // Persist the current thread so /resume can reopen it. Called after every run; cheap and best-effort.
 function persist() {
@@ -196,6 +197,7 @@ function freshSession() {
   conversation = []; // a cleared screen means a cleared thread — the next run starts the model fresh
   sessionId = newSessionId(); // a fresh thread is a new session on disk; the old one stays resumable
   sessionTitle = "";
+  lastWasMinions = false; // a cleared session won't resume the old team via a bare "continue"
   resetModelPolicy(); // a fresh session asks the model-policy question again on its next delegation
   state = { ...state, items: [{ id: nextId++, ...bannerItem() } as Item], gen: state.gen + 1, session: { prompt: 0, completion: 0, cost: 0, turns: 0 } };
   emit();
@@ -214,6 +216,7 @@ function refreshBanner() {
 // Run a goal through the agent, streaming events into the store. One run at a time (busy guard).
 async function runGoal(goal: string) {
   if (state.busy) return;
+  lastWasMinions = false; // a normal single-agent run; a later bare "continue" should not hijack to /minions
   const { content, attached, skipped } = attachImages(goal);
   const tag = attached.length ? `  ${c.dim(`📎 ${attached.length} image${attached.length > 1 ? "s" : ""}`)}` : "";
   if (!sessionTitle) sessionTitle = goal.slice(0, 80);
@@ -237,6 +240,36 @@ async function runGoal(goal: string) {
   }
 }
 
+// The instruction handed to gru when resuming an interrupted team.
+const RESUME_GOAL =
+  "Continue where the team left off — call list_agents, resume any agent that reported it didn't finish (spawn_minion with its resume_id), and complete the original goal.";
+
+// Run a goal through the concurrent /minions team (gru → overseers → minions). Like runGoal but in a
+// fresh context (the team coordinates over its own message bus, not the session thread). `resume` reuses
+// the last team in this process so its agents' transcripts (and resume_id) carry over.
+async function runMinionsGoal(goal: string, resume = false) {
+  if (state.busy) return;
+  const { runMinions, hasResumableTeam } = await import("./minions");
+  if (resume && !hasResumableTeam()) return push({ kind: "info", lines: [c.yellow("no minions run to resume — start one with /minions <goal>")] });
+  if (!resume && !goal) return push({ kind: "info", lines: [c.yellow("usage: /minions <goal>  (or /minions continue to resume the last team)")] });
+  lastWasMinions = true;
+  if (!sessionTitle) sessionTitle = `/minions ${goal}`.slice(0, 80);
+  push({ kind: "user", text: resume ? "/minions continue" : `/minions ${goal}` });
+  set({ busy: true });
+  ui.startRun();
+  const t0 = Date.now();
+  try {
+    const r = await runMinions(goal, ui, resume);
+    push({ kind: "result", success: r.success, summary: r.summary, ms: Date.now() - t0 });
+  } catch (e: any) {
+    push({ kind: "result", success: false, summary: `minions failed: ${e.message ?? e}`, ms: Date.now() - t0 });
+  } finally {
+    ui.endRun();
+    set({ busy: false });
+    persist();
+  }
+}
+
 // --- slash commands ---
 
 const HELP = [
@@ -245,6 +278,8 @@ const HELP = [
   `  ${c.primary("/model <query>")}    open the picker pre-filtered`,
   `  ${c.primary("/model <id>")}       switch to an exact model id (e.g. an OpenRouter "a/b" id)`,
   `  ${c.primary("/colors")}           change the accent color (presets or #rrggbb)`,
+  `  ${c.primary("/minions <goal>")}   run a concurrent team (gru → overseers → minions) on the goal`,
+  `  ${c.primary("/minions continue")}  resume the last team where it left off (or just type "continue")`,
   `  ${c.primary("/setup")}            add/switch provider + API key (OpenRouter, OpenAI)`,
   `  ${c.primary("/status")}           model, context window, working dir`,
   `  ${c.primary("/usage")}            tokens + estimated cost this session`,
@@ -447,7 +482,12 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
   const line = input.trim();
   if (!line) return;
   if (line === "exit" || line === "quit") return onExit();
-  if (!line.startsWith("/")) return runGoal(line);
+  // After a /minions run, a bare "continue"/"resume" resumes the team (with its agents' context) rather
+  // than starting a fresh, contextless single agent. Any other input falls through to a normal run.
+  if (!line.startsWith("/")) {
+    if (lastWasMinions && /^(continue|resume|keep going)$/i.test(line)) return runMinionsGoal(RESUME_GOAL, true);
+    return runGoal(line);
+  }
 
   const [cmd, ...rest] = line.split(/\s+/);
   const arg = rest.join(" ").trim();
@@ -510,6 +550,16 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
         ],
       });
     }
+    case "/minions": {
+      // No arg, or a leading "continue"/"resume", resumes the last team; trailing text becomes an extra
+      // instruction. Anything else starts a fresh team on that goal.
+      const m = arg.match(/^(continue|resume)\b[:,]?\s*(.*)$/is);
+      if (!arg || m) {
+        const extra = m?.[2]?.trim();
+        return runMinionsGoal(extra ? `${RESUME_GOAL}\n\nAlso: ${extra}` : RESUME_GOAL, true);
+      }
+      return runMinionsGoal(arg, false);
+    }
     case "/setup":
       return openSetup();
     case "/resume":
@@ -524,6 +574,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
 // Command names for the "/" autocomplete menu in the input.
 export const COMMANDS = [
   { name: "/model", desc: "show or switch the model" },
+  { name: "/minions", desc: "run a concurrent gru→overseers→minions team" },
   { name: "/colors", desc: "change the accent color" },
   { name: "/setup", desc: "add/switch provider + API key" },
   { name: "/status", desc: "model, window, working dir" },

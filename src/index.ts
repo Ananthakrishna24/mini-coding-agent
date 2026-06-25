@@ -22,7 +22,11 @@ const goal = process.argv.slice(2).join(" ").trim();
 
 if (goal) {
   // One-shot: plain console UI, structured result → a real exit code.
+  // `/minions <goal>` runs the concurrent team (gru → overseers → minions) instead of a single agent.
+  const minions = goal.startsWith("/minions");
+  const realGoal = minions ? goal.slice("/minions".length).trim() : goal;
   const { run } = await import("./agent");
+  const { runMinions } = await import("./minions");
   const { getModel, setModel } = await import("./llm");
   const { createUI, resultLine, describeModel } = await import("./ui");
   const ui = createUI();
@@ -30,7 +34,7 @@ if (goal) {
   ui.setModelLabel(describeModel(info, getModel()));
   const t0 = Date.now();
   try {
-    const r = await run(goal, ui);
+    const r = minions ? await runMinions(realGoal, ui) : await run(realGoal, ui);
     ui.endRun();
     resultLine(r.success, r.summary, Date.now() - t0);
     process.exit(r.success ? 0 : 1);
@@ -52,6 +56,7 @@ if (process.stdin.isTTY) {
 } else {
   // Piped stdin (no TTY) → no Ink (it needs raw mode). Run each line as a goal with the plain UI.
   const { run } = await import("./agent");
+  const { runMinions } = await import("./minions");
   const { getModel, setModel, modelInfo } = await import("./llm");
   const { createUI, banner, resultLine } = await import("./ui");
   const ui = createUI();
@@ -62,9 +67,16 @@ if (process.stdin.isTTY) {
   for await (const raw of rl) {
     const line = raw.trim();
     if (!line || line === "exit" || line === "quit") break;
+    const minions = line.startsWith("/minions");
+    const mArg = minions ? line.slice("/minions".length).trim() : "";
+    const resume = minions && (!mArg || /^(continue|resume)\b/i.test(mArg)); // resume the last team in this process
     const t0 = Date.now();
     try {
-      const r = await run(line, ui, 0, conversation);
+      // `/minions` runs the concurrent team in a fresh context (no shared conversation thread); `/minions
+      // continue` resumes the previous team with its agents' transcripts intact.
+      const r = minions
+        ? await runMinions(resume ? "Continue where the team left off — call list_agents and resume any agent that didn't finish (spawn_minion with its resume_id)." : mArg, ui, resume)
+        : await run(line, ui, 0, conversation);
       ui.endRun();
       resultLine(r.success, r.summary, Date.now() - t0);
     } catch (e: any) {
