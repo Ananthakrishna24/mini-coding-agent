@@ -3,8 +3,8 @@
 // plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker, type ResumePicker } from "./store";
-import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, type Item, type Picker, type ResumePicker } from "./store";
+import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail, termWidth, fmtPrice } from "./format";
 import { clipboardImageToTemp } from "./images";
 import { matchFiles } from "./tools/workspace";
 import { Onboarding } from "./onboarding";
@@ -20,7 +20,7 @@ function ItemView({ item }: { item: Item }) {
     case "user":
       return (
         <Box marginTop={1}>
-          <Text>{`${c.primary("›")} ${c.bold(item.text)}`}</Text>
+          <Text>{ind(`${c.primary("›")} ${c.bold(item.text)}`)}</Text>
         </Box>
       );
     case "warn":
@@ -45,7 +45,7 @@ function ItemView({ item }: { item: Item }) {
         <Box flexDirection="column" marginTop={1}>
           <Text>{ind(header)}</Text>
           {rows.map((row, i) => (
-            <Text key={i}>{`    ${r}${c.dim(i === 0 ? "⎿" : " ")} ${row}`}</Text>
+            <Text key={i}>{`  ${r}${c.dim(i === 0 ? "⎿  " : "   ")}${row}`}</Text>
           ))}
         </Box>
       );
@@ -82,62 +82,66 @@ function Spinner({ label }: { label: string }) {
   return <Text>{`${c.primary(SPIN[f % SPIN.length])} ${c.dim(`${label}…`)}`}</Text>;
 }
 
-// Live status under the scrollback: spinner while working, the plan checklist, and the model · ctx line.
+// Live status under the scrollback: the plan checklist in a styled cyan card.
 function Footer() {
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const planRows = s.plan.slice(0, 8);
+  if (s.plan.length === 0) return null;
   return (
-    <Box flexDirection="column" marginTop={1}>
-      {s.spinner && (
-        <Box>
-          <Text>{"  "}</Text>
-          <Spinner label={s.spinner} />
-        </Box>
-      )}
-      {s.plan.length > 0 && (
-        <>
-          <Text>{indent(c.dim(`Plan ▸ ${s.planDone}/${s.planTotal}`))}</Text>
-          {planRows.map((l, i) => (
-            <Text key={i}>{indent(iconize(l))}</Text>
-          ))}
-          {s.plan.length > 8 && <Text>{indent(c.dim(`… +${s.plan.length - 8} more`))}</Text>}
-        </>
-      )}
-      {s.modelLabel && <Text>{indent(c.dim(`${s.modelLabel}${s.ctxPct != null ? ` · ctx ${s.ctxPct}%` : ""}`))}</Text>}
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text color="cyan" bold>{`📋 Agent Execution Plan (${s.planDone}/${s.planTotal})`}</Text>
+        {s.spinner && <Spinner label={s.spinner} />}
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Box flexDirection="column" marginTop={1}>
+        {planRows.map((l, i) => (
+          <Text key={i}>{iconize(l)}</Text>
+        ))}
+        {s.plan.length > 8 && <Text>{c.dim(`  … +${s.plan.length - 8} more`)}</Text>}
+      </Box>
     </Box>
   );
 }
 
-// The /model picker: a filter line plus a scrolling, highlighted list (a viewport around the cursor).
+// The /model picker: a filterable, arrow-key list of models inside a styled card.
 const VIEW = 8;
 function PickerView({ picker }: { picker: Picker }) {
   const { items, sel, query, loading } = picker;
   const start = Math.max(0, Math.min(sel - Math.floor(VIEW / 2), Math.max(0, items.length - VIEW)));
   const view = items.slice(start, start + VIEW);
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>{`${c.primary("◉ pick a model")}  ${c.dim("↑↓ choose · type to filter · ⏎ select · esc cancel")}`}</Text>
-      <Text>{`  ${c.dim("filter:")} ${query || c.dim("(all tool-capable)")}`}</Text>
-      {loading ? (
-        <Text>{c.dim("  loading catalog…")}</Text>
-      ) : items.length === 0 ? (
-        <Text>{c.yellow("  no matching tool-capable models")}</Text>
-      ) : (
-        view.map((m, i) => {
-          const active = start + i === sel;
-          return (
-            <Text key={m.id} color={active ? getPrimaryColor() : undefined}>
-              {`  ${active ? "›" : " "} ${describeModel(m, m.id)}`}
-            </Text>
-          );
-        })
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text color="cyan" bold>◉ Select Model</Text>
+        <Text>{c.dim("↑↓ navigate · ⏎ choose · Esc back")}</Text>
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Text>{`🔍 ${c.bold("Filter:")} ${query || c.dim("(type to search...)")}`}</Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {loading ? (
+          <Text>{c.dim("  loading catalog…")}</Text>
+        ) : items.length === 0 ? (
+          <Text>{c.yellow("  no matching tool-capable models")}</Text>
+        ) : (
+          view.map((m, i) => {
+            const active = start + i === sel;
+            return (
+              <Text key={m.id} color={active ? getPrimaryColor() : undefined}>
+                {`  ${active ? "▶" : " "} ${describeModel(m, m.id)}`}
+              </Text>
+            );
+          })
+        )}
+      </Box>
+      {items.length > VIEW && (
+        <Text>{`  ${c.dim(`Showing ${sel + 1} of ${items.length} models`)}`}</Text>
       )}
-      {items.length > VIEW && <Text>{`  ${c.dim(`${sel + 1}/${items.length}`)}`}</Text>}
     </Box>
   );
 }
 
-// The /resume picker: a scrolling list of past chat sessions (most recent first). Same keys as /model.
+// The /resume picker: a scrolling list of past chat sessions inside a styled card.
 function ResumePickerView({ picker }: { picker: ResumePicker }) {
   const { items, sel } = picker;
   const start = Math.max(0, Math.min(sel - Math.floor(VIEW / 2), Math.max(0, items.length - VIEW)));
@@ -149,70 +153,106 @@ function ResumePickerView({ picker }: { picker: ResumePicker }) {
     return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
   };
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>{`${c.primary("◉ resume a chat")}  ${c.dim("↑↓ choose · ⏎ resume · esc cancel")}`}</Text>
-      {view.map((s, i) => {
-        const active = start + i === sel;
-        const title = (s.title || "(untitled)").slice(0, 56);
-        return (
-          <Text key={s.id} color={active ? getPrimaryColor() : undefined}>
-            {`  ${active ? "›" : " "} ${title}  ${c.dim(`${ago(s.updated)} · ${s.cwd.replace(process.env.HOME ?? "~", "~")}`)}`}
-          </Text>
-        );
-      })}
-      {items.length > VIEW && <Text>{`  ${c.dim(`${sel + 1}/${items.length}`)}`}</Text>}
+    <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text color="magenta" bold>◉ Resume Chat Session</Text>
+        <Text>{c.dim("↑↓ navigate · ⏎ resume · Esc back")}</Text>
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {view.map((s, i) => {
+          const active = start + i === sel;
+          const title = (s.title || "(untitled)").slice(0, 56);
+          return (
+            <Text key={s.id} color={active ? getPrimaryColor() : undefined}>
+              {`  ${active ? "▶" : " "} ${title.padEnd(45)} ${c.dim(`${ago(s.updated)} · ${s.cwd.replace(process.env.HOME ?? "~", "~")}`)}`}
+            </Text>
+          );
+        })}
+      </Box>
+      {items.length > VIEW && (
+        <Text>{`  ${c.dim(`Showing ${sel + 1} of ${items.length} sessions`)}`}</Text>
+      )}
     </Box>
   );
 }
 
-// The /colors picker: each preset swatched in its own color, the active one marked. Same keys as /model.
+// The /colors picker: each preset swatched in its own color, inside a styled card.
 function ColorPickerView({ sel }: { sel: number }) {
   const cur = getPrimaryColor();
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>{`${c.primary("◉ pick a color")}  ${c.dim("↑↓ choose · ⏎ select · esc cancel")}`}</Text>
-      {COLOR_PRESETS.map((p, i) => {
-        const active = i === sel;
-        const nameStr = p.name.padEnd(8);
-        const marker = active ? c.primary("›") : " ";
-        const dot = paintHex(p.hex, p.hex === cur ? "●" : "○");
-        const name = active ? c.bold(nameStr) : nameStr;
-        return (
-          <Text key={p.hex}>{`  ${marker} ${dot} ${name} ${c.dim(p.hex)}`}</Text>
-        );
-      })}
-      <Text>{c.dim("  custom: /colors #rrggbb")}</Text>
+    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text>{c.bold(c.yellow("◉ Choose UI Accent Color Preset"))}</Text>
+        <Text>{c.dim("↑↓ choose · ⏎ apply · Esc back")}</Text>
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {COLOR_PRESETS.map((p, i) => {
+          const active = i === sel;
+          const nameStr = p.name.padEnd(8);
+          const marker = active ? "▶" : " ";
+          const dot = paintHex(p.hex, p.hex === cur ? "●" : "○");
+          const name = active ? c.bold(nameStr) : nameStr;
+          return (
+            <Text key={p.hex} color={active ? getPrimaryColor() : undefined}>
+              {`  ${marker} ${dot} ${name} ${c.dim(p.hex)}`}
+            </Text>
+          );
+        })}
+      </Box>
+      <Text>{c.dim("  Tip: Type '/colors #rrggbb' directly for any custom hex code")}</Text>
     </Box>
   );
 }
 
-// The model-policy overlay, shown once on the first delegation. Same keys as /colors.
+// The model-policy overlay, shown once on the first delegation, inside a styled card.
 function PolicyPickerView({ sel }: { sel: number }) {
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>{`${c.primary("◉ model policy for subagents")}  ${c.dim("↑↓ choose · ⏎ set · esc = current model")}`}</Text>
-      <Text>{c.dim("  asked once this session — how should delegated subagents pick a model?")}</Text>
-      {POLICY_OPTIONS.map((opt, i) => {
-        const active = i === sel;
-        const marker = active ? c.primary("›") : " ";
-        const label = active ? c.bold(opt.label) : opt.label;
-        return <Text key={opt.value}>{`  ${marker} ${label}`}</Text>;
-      })}
+    <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text color="magenta" bold>◉ Subagent Model Delegation Policy</Text>
+        <Text>{c.dim("↑↓ choose · ⏎ set · Esc default")}</Text>
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Text>{c.dim("  How should delegated subagents choose which model to run on?")}</Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {POLICY_OPTIONS.map((opt, i) => {
+          const active = i === sel;
+          const marker = active ? "▶" : " ";
+          const label = active ? c.bold(opt.label) : opt.label;
+          return (
+            <Text key={opt.value} color={active ? getPrimaryColor() : undefined}>
+              {`  ${marker} ${label}`}
+            </Text>
+          );
+        })}
+      </Box>
     </Box>
   );
 }
 
-// The reasoning-effort picker, shown right after a reasoning model is chosen. Same keys as /colors.
+// The reasoning-effort picker, shown right after a reasoning model is chosen, inside a styled card.
 function EffortPickerView({ sel }: { sel: number }) {
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text>{`${c.primary("◉ reasoning effort")}  ${c.dim("↑↓ choose · ⏎ select · esc keep default")}`}</Text>
-      {EFFORT_LEVELS.map((level, i) => {
-        const active = i === sel;
-        const marker = active ? c.primary("›") : " ";
-        const name = active ? c.bold(level) : level;
-        return <Text key={level}>{`  ${marker} ${name}`}</Text>;
-      })}
+    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text>{c.bold(c.yellow("◉ Choose Reasoning Effort Level"))}</Text>
+        <Text>{c.dim("↑↓ choose · ⏎ select · Esc default")}</Text>
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {EFFORT_LEVELS.map((level, i) => {
+          const active = i === sel;
+          const marker = active ? "▶" : " ";
+          const name = active ? c.bold(level) : level;
+          return (
+            <Text key={level} color={active ? getPrimaryColor() : undefined}>
+              {`  ${marker} ${name}`}
+            </Text>
+          );
+        })}
+      </Box>
     </Box>
   );
 }
@@ -279,11 +319,49 @@ function Prompt() {
       return;
     }
     if (busy) return; // one run at a time — ignore typing while the agent works
+    if (input === "?" && !buf) {
+      setBuf("");
+      void submit("/help", exit);
+      return;
+    }
     if (key.ctrl && (input === "v" || input === "\x16")) {
       void clipboardImageToTemp().then((p) => {
         if (p) setBuf((b) => `${b}${b && !b.endsWith(" ") ? " " : ""}${p} `);
       });
       return;
+    }
+    if (key.ctrl) {
+      if (input === "o") {
+        void openModelPicker("");
+        return;
+      }
+      if (input === "k") {
+        openColorPicker();
+        return;
+      }
+      if (input === "r") {
+        openResumePicker();
+        return;
+      }
+      if (input === "u") {
+        setBuf("");
+        void submit("/usage", exit);
+        return;
+      }
+      if (input === "t") {
+        setBuf("");
+        void submit("/status", exit);
+        return;
+      }
+      if (input === "s") {
+        openSetup();
+        return;
+      }
+      if (input === "l") {
+        setBuf("");
+        void submit("/clear", exit);
+        return;
+      }
     }
     // "@" file picker owns Enter/Tab/arrows while open: ⏎ or Tab inserts the highlighted path in place
     // of the @token, arrows move. Typing/backspace fall through to edit the query (and reposition the
@@ -318,38 +396,68 @@ function Prompt() {
     if (input && !key.ctrl && !key.meta) setBuf((b) => b + input);
   });
 
-  if (s.picker) return <PickerView picker={s.picker} />;
-  if (s.resumePicker) return <ResumePickerView picker={s.resumePicker} />;
-  if (s.policyPicker) return <PolicyPickerView sel={s.policyPicker.sel} />;
-  if (s.colorPicker) return <ColorPickerView sel={s.colorPicker.sel} />;
-  if (s.effortPicker) return <EffortPickerView sel={s.effortPicker.sel} />;
+  let inputText = buf;
+  let isDimPrompt = !buf;
+  if (s.picker) {
+    inputText = `/model ${s.picker.query}`;
+    isDimPrompt = false;
+  } else if (s.resumePicker) {
+    inputText = "/resume";
+    isDimPrompt = false;
+  } else if (s.colorPicker) {
+    inputText = "/colors";
+    isDimPrompt = false;
+  } else if (s.effortPicker) {
+    inputText = "/model";
+    isDimPrompt = false;
+  } else if (s.policyPicker) {
+    inputText = "Subagent delegation policy...";
+    isDimPrompt = true;
+  }
+
+  const parts = [s.modelName];
+  if (s.modelEffort) parts.push(s.modelEffort);
+  if (s.modelProvider) parts.push(s.modelProvider);
+  const rightText = parts.filter(Boolean).join(" · ");
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box borderStyle="round" borderColor={busy ? "yellow" : getPrimaryColor()} paddingX={1} width="100%">
-        <Text>{c.primary("›")} </Text>
-        <Text>{busy ? c.dim(buf || "working…") : buf}</Text>
+      {/* Input row */}
+      <Box borderStyle="single" borderLeft={false} borderRight={false} borderColor={getPrimaryColor()} paddingX={1} width="100%">
+        <Text>{busy ? c.yellow("⠋ ") : c.primary("› ")}</Text>
+        {busy ? (
+          <Spinner label={s.spinner || "Working"} />
+        ) : (
+          <Text>{isDimPrompt ? c.dim(inputText || "Type a goal or command...") : inputText}</Text>
+        )}
         {!busy && <Text>{c.dim("▏")}</Text>}
       </Box>
+
+      {/* Autocomplete command menu if active */}
       {menu.length > 0 && (
-        <Box flexDirection="column" paddingLeft={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={getPrimaryColor()} paddingX={1} marginTop={1} marginBottom={0} width="100%">
+          <Text color="cyan" bold>Command Menu</Text>
+          <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
           {menu.map((m, i) => (
             <Text key={m.name} color={i === Math.min(sel, menu.length - 1) ? getPrimaryColor() : undefined}>
-              {`${i === Math.min(sel, menu.length - 1) ? "›" : " "} ${m.name.padEnd(10)} ${c.dim(m.desc)}`}
+              {`  ${i === Math.min(sel, menu.length - 1) ? "▶" : " "} ${m.name.padEnd(10)} ${c.dim(m.desc)}`}
             </Text>
           ))}
         </Box>
       )}
+
+      {/* File autocomplete menu if active */}
       {fileMenu.length > 0 && (() => {
-        // Scroll a FILE_MENU-row window around the highlighted file (same viewport trick as the model picker).
         const start = Math.max(0, Math.min(fileIdx - Math.floor(FILE_MENU / 2), Math.max(0, fileMenu.length - FILE_MENU)));
         return (
-          <Box flexDirection="column" paddingLeft={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor={getPrimaryColor()} paddingX={1} marginTop={1} marginBottom={0} width="100%">
+            <Text color="cyan" bold>Matching Files</Text>
+            <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
             {fileMenu.slice(start, start + FILE_MENU).map((f, i) => {
               const active = start + i === fileIdx;
               return (
                 <Text key={f} color={active ? getPrimaryColor() : undefined}>
-                  {`${active ? "›" : " "} ${f}`}
+                  {`  ${active ? "▶" : " "} ${f}`}
                 </Text>
               );
             })}
@@ -357,12 +465,38 @@ function Prompt() {
           </Box>
         );
       })()}
+
+      {/* Pickers/overlays if active */}
+      {s.picker && <PickerView picker={s.picker} />}
+      {s.resumePicker && <ResumePickerView picker={s.resumePicker} />}
+      {s.policyPicker && <PolicyPickerView sel={s.policyPicker.sel} />}
+      {s.colorPicker && <ColorPickerView sel={s.colorPicker.sel} />}
+      {s.effortPicker && <EffortPickerView sel={s.effortPicker.sel} />}
+
+      {/* Status Line & Shortcuts */}
+      <Box paddingX={1} justifyContent="space-between" width="100%" marginTop={1}>
+        <Text dimColor={true}>
+          ? for shortcuts
+        </Text>
+        <Text dimColor={true}>
+          {rightText}
+        </Text>
+      </Box>
     </Box>
   );
 }
 
 export function App() {
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const [, setWidth] = useState(0);
+  useEffect(() => {
+    const handleResize = () => setWidth(process.stdout.columns || 80);
+    process.stdout.on("resize", handleResize);
+    return () => {
+      process.stdout.off("resize", handleResize);
+    };
+  }, []);
+
   return (
     <Box flexDirection="column">
       {/* key=gen: /clear bumps it so Static remounts (its internal counter resets) and reprints fresh */}

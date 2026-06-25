@@ -33,7 +33,7 @@ export type UI = {
 // `depth` nests the block under a subagent's rail so its output reads as the subagent's, not the parent's.
 function block(rows: string[], depth = 0): void {
   const r = rail(depth);
-  rows.forEach((row, i) => console.log(`    ${r}${c.dim(i === 0 ? "⎿" : " ")} ${row}`));
+  rows.forEach((row, i) => console.log(`  ${r}${c.dim(i === 0 ? "⎿  " : "   ")}${row}`));
 }
 
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -101,7 +101,7 @@ export function createUI(): UI {
   };
   const exitSubagent = (result: string) => {
     nest = Math.max(0, nest - 1);
-    console.log(`  ${rail(nest)}${c.dim("⎿")} ${result}`);
+    console.log(`  ${rail(nest)}${c.dim("⎿  ")}${result}`);
   };
 
   function tool(name: string, argsJson: string, result: string) {

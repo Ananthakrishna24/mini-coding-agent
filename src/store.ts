@@ -46,6 +46,9 @@ export type State = {
   planDone: number;
   planTotal: number;
   modelLabel: string;
+  modelName: string;
+  modelEffort: string;
+  modelProvider: string;
   ctxPct: number | null;
   ctxUsed: number;
   ctxBudget: number;
@@ -71,6 +74,9 @@ let state: State = {
   planDone: 0,
   planTotal: 0,
   modelLabel: "",
+  modelName: "",
+  modelEffort: "",
+  modelProvider: "",
   ctxPct: null,
   ctxUsed: 0,
   ctxBudget: 0,
@@ -174,7 +180,14 @@ let policyResolver: ((p: ModelPolicy) => void) | null = null;
 async function syncModel() {
   currentInfo = await modelInfo().catch(() => undefined);
   const eff = getEffort();
-  ui.setModelLabel(describeModel(currentInfo, getModel()) + (eff ? ` · ${eff}` : ""));
+  const shortModel = getModel().split("/").pop() ?? getModel();
+  const provider = currentInfo?.provider ?? "";
+  set({
+    modelLabel: describeModel(currentInfo, getModel()) + (eff ? ` · ${eff}` : ""),
+    modelName: shortModel,
+    modelEffort: eff && eff !== "default" ? eff : "",
+    modelProvider: provider,
+  });
 }
 
 const bannerItem = (): NewItem => ({
@@ -197,7 +210,15 @@ function freshSession() {
   sessionId = newSessionId(); // a fresh thread is a new session on disk; the old one stays resumable
   sessionTitle = "";
   resetModelPolicy(); // a fresh session asks the model-policy question again on its next delegation
-  state = { ...state, items: [{ id: nextId++, ...bannerItem() } as Item], gen: state.gen + 1, session: { prompt: 0, completion: 0, cost: 0, turns: 0 } };
+  state = {
+    ...state,
+    items: [{ id: nextId++, ...bannerItem() } as Item],
+    gen: state.gen + 1,
+    session: { prompt: 0, completion: 0, cost: 0, turns: 0 },
+    modelName: "",
+    modelEffort: "",
+    modelProvider: "",
+  };
   emit();
 }
 

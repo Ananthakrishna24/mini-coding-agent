@@ -8,7 +8,7 @@ const VERSION: string = (createRequire(import.meta.url)("../package.json") as { 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { diffLines } from "./diff";
 import { renderMarkdown, type Palette } from "./md";
 import type { ModelInfo } from "./llm";
@@ -323,22 +323,23 @@ function artRow(line: string): { t: string; s: (x: string) => string } {
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
-  const title = `MiniCode v${VERSION}`;
+  const titleStr = c.bold(c.primary("MiniCode")) + " " + c.dim(`v${VERSION}`) + " " + c.dim(`· Ananthakrishna's build`);
   const art = minionArt.map(artRow);
   const artW = Math.max(...art.map((a) => a.t.length));
 
-  // The welcome text, set beside the mascot rather than stacked under it.
+  // The welcome text, set beside the mascot rather than stacked under it. No emojis.
   const text: { t: string; s?: (x: string) => string }[] = [
-    { t: `model    ${info?.id ?? id}` },
+    { t: `Model      ${info?.id ?? id}`, s: (x) => c.primary(x) },
     ...(info
       ? [
-          { t: `context  ${fmtTokens(info.context)} tokens` },
-          { t: `price    ${fmtPrice(info.promptPrice)} in · ${fmtPrice(info.completionPrice)} out / 1M` },
+          { t: `Context    ${fmtTokens(info.context)} tokens` },
+          { t: `Price      ${fmtPrice(info.promptPrice)} prompt · ${fmtPrice(info.completionPrice)} completion / 1M` },
         ]
       : []),
-    { t: `dir      ${clip(cwd, 48)}` },
+    { t: `Folder     ${clip(cwd, 48)}` },
     { t: "" },
-    { t: "type a goal  ·  /help for commands  ·  'exit' to quit" },
+    { t: `Ready to code! Type your request below.` },
+    { t: `Hotkeys:   Ctrl+O models  ·  Ctrl+K colors  ·  Ctrl+R sessions` },
   ];
 
   // Pair the columns row-by-row, vertically centering the shorter (text) block against the taller (art).
@@ -364,7 +365,6 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
 
   // Top border with the title embedded top-left: ╭─ MiniCode ──…──╮. The title wears the primary
   // accent; the dashes fill the rest so the rule matches the bottom border's visible width (w + 4).
-  const titleStr = c.bold(c.primary(title));
   const titleW = visibleLen(titleStr);
   const topRule = c.primary("╭─ ") + titleStr + c.primary(" " + "─".repeat(Math.max(0, w - titleW - 1)) + "╮");
   const bottomRule = c.primary("╰" + "─".repeat(w + 2) + "╯");

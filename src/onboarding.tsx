@@ -1,13 +1,9 @@
-// First-run setup. Shown when the app starts interactively with no usable provider key: pick a
-// provider, paste the key (never echoed in full), accept or override the starting model, then write
-// a 0600 .env. Lives apart from the main App so it can run before ./llm is imported (which throws on
-// a missing key). No model/network here — just key capture and the .env write.
 import { createElement, useState, type FC } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 import fs from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
-import { c } from "./format";
+import { c, termWidth, getPrimaryColor } from "./format";
 import { PROVIDERS, resolveProvider, mergeEnv, type Provider } from "./provider";
 
 // Where API keys are stored. The local .env (project dir) takes priority when it contains at least
@@ -103,42 +99,54 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
     }
   });
 
-  return createElement(
-    Box,
-    { flexDirection: "column", paddingX: 1, paddingY: 1 },
-    createElement(Text, { key: "t" }, c.bold("Welcome — let's set up your model provider.")),
-    createElement(Text, { key: "s", dimColor: true }, "Keys are saved to ~/.config/minicode/.env (owner-only) and never printed."),
-    createElement(Box, { key: "gap", marginTop: 1, flexDirection: "column" }, renderStep()),
-    error ? createElement(Text, { key: "e", color: "yellow" }, `\n${error}`) : null,
-  );
-
-  function renderStep() {
+  const renderStep = () => {
     if (step === "provider") {
-      return [
-        createElement(Text, { key: "q" }, "Choose a provider  ", c.dim("(↑↓, ⏎ to select)")),
-        ...providers.map((p, i) =>
-          createElement(
-            Text,
-            { key: p, color: i === sel ? undefined : "gray" },
-            `${i === sel ? c.primary("❯") : " "} ${PROVIDERS[p].label}  ${c.dim(PROVIDERS[p].keyVar)}`,
-          ),
-        ),
-      ];
+      return (
+        <Box flexDirection="column">
+          <Text>{`👉 Choose a provider  ${c.dim("(↑↓ to navigate, ⏎ to select)")}`}</Text>
+          {providers.map((p, i) => (
+            <Text key={p} color={i === sel ? getPrimaryColor() : "gray"}>
+              {`  ${i === sel ? "▶" : " "} ${PROVIDERS[p].label.padEnd(12)} ${c.dim(PROVIDERS[p].keyVar)}`}
+            </Text>
+          ))}
+        </Box>
+      );
     }
     if (step === "key") {
-      return [
-        createElement(Text, { key: "q" }, `Paste your ${PROVIDERS[provider].label} API key  `, c.dim("(⏎ to continue)")),
-        createElement(Text, { key: "v" }, "  ", key ? c.primary(maskKey(key)) : c.dim("waiting for input…")),
-      ];
+      return (
+        <Box flexDirection="column">
+          <Text>{`🔑 Paste your ${c.bold(PROVIDERS[provider].label)} API key  ${c.dim("(⏎ to continue)")}`}</Text>
+          <Text>{`  ${key ? c.primary(maskKey(key)) : c.dim("waiting for input…")}`}</Text>
+        </Box>
+      );
     }
     if (step === "model") {
-      return [
-        createElement(Text, { key: "q" }, "Starting model  ", c.dim("(⏎ to accept the default, or type an id)")),
-        createElement(Text, { key: "v" }, "  ", c.primary(model || PROVIDERS[provider].defaultModel)),
-      ];
+      return (
+        <Box flexDirection="column">
+          <Text>{`🤖 Starting model ID  ${c.dim("(⏎ to accept default, or type ID)")}`}</Text>
+          <Text>{`  ${model ? c.primary(model) : c.dim(PROVIDERS[provider].defaultModel)}`}</Text>
+        </Box>
+      );
     }
-    return [createElement(Text, { key: "d", color: "green" }, `✔ Saved ${PROVIDERS[provider].label} config to ~/.config/minicode/.env`)];
-  }
+    return (
+      <Text color="green">{`✔ Saved ${PROVIDERS[provider].label} configuration to ~/.config/minicode/.env`}</Text>
+    );
+  };
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1} width="100%">
+      <Box justifyContent="space-between">
+        <Text color="cyan" bold>◉ MiniCode Provider Configuration</Text>
+        <Text>{c.dim(inApp ? "Esc cancel · Ctrl+C quit" : "Ctrl+C quit")}</Text>
+      </Box>
+      <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
+      <Text>{c.dim("API Keys are stored securely on your machine (never transmitted).")}</Text>
+      <Box flexDirection="column" marginTop={1} marginBottom={1}>
+        {renderStep()}
+      </Box>
+      {error && <Text color="yellow">{`⚠️  ${error}`}</Text>}
+    </Box>
+  );
 };
 
 // Run onboarding if needed. Resolves true if it wrote a .env (caller should re-load env + continue),
