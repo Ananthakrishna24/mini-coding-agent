@@ -2,7 +2,7 @@
 // functions only (no SDK, no network, no import-time side effects) so the model client, the
 // onboarding screen, and the offline self-check can all share this without booting a client.
 
-export type Provider = "openrouter" | "openai";
+export type Provider = "openrouter" | "openai" | "mistral";
 
 // Per-provider defaults: API base, the env var holding the key, and a sensible starting model.
 // OpenAI uses the SDK's built-in baseURL (null = don't override it).
@@ -19,6 +19,12 @@ export const PROVIDERS: Record<Provider, { label: string; baseURL: string | null
     keyVar: "OPENAI_API_KEY",
     defaultModel: "gpt-5.5", // flagship per OpenAI's "not sure where to start" guidance; Chat Completions + tools
   },
+  mistral: {
+    label: "Mistral",
+    baseURL: "https://api.mistral.ai/v1",
+    keyVar: "MISTRAL_API_KEY",
+    defaultModel: "mistral-large-latest",
+  },
 };
 
 export type Resolved = { provider: Provider; apiKey: string };
@@ -30,7 +36,9 @@ export type Resolved = { provider: Provider; apiKey: string };
 // completion call, or {} when no effort is set (so a non-reasoning model gets a clean request).
 export function reasoningParams(provider: Provider, effort: string | null): Record<string, unknown> {
   if (!effort) return {};
-  return provider === "openai" ? { reasoning_effort: effort } : { reasoning: { effort } };
+  if (provider === "openai") return { reasoning_effort: effort };
+  if (provider === "mistral") return {};
+  return { reasoning: { effort } };
 }
 
 // OpenAI's catalog carries no capability flags, so infer reasoning support from the id: the o-series
@@ -44,6 +52,10 @@ export function openaiVision(id: string): boolean {
   if (/^gpt-3\.5/.test(id)) return false;
   if (/^o[13]-mini/.test(id)) return false;
   return true;
+}
+
+export function mistralVision(id: string): boolean {
+  return /pixtral/.test(id);
 }
 
 // Decide which provider to use from the environment. Rule:
@@ -60,19 +72,20 @@ export function resolveProvider(env: Record<string, string | undefined> = proces
   const explicit = env.PROVIDER?.trim().toLowerCase();
 
   if (explicit) {
-    if (explicit !== "openrouter" && explicit !== "openai") {
-      return { error: `PROVIDER="${env.PROVIDER}" is not recognized — use "openrouter" or "openai"` };
+    if (!(explicit in PROVIDERS)) {
+      return { error: `PROVIDER="${env.PROVIDER}" is not recognized — use "openrouter", "openai", or "mistral"` };
     }
     const p = explicit as Provider;
     if (!has(p)) return { error: `PROVIDER=${p} but ${PROVIDERS[p].keyVar} is not set` };
     return { provider: p, apiKey: env[PROVIDERS[p].keyVar]!.trim() };
   }
 
-  // No explicit choice — infer. OpenRouter wins the tie when both keys are present.
-  if (has("openrouter")) return { provider: "openrouter", apiKey: env.OPENROUTER_API_KEY!.trim() };
-  if (has("openai")) return { provider: "openai", apiKey: env.OPENAI_API_KEY!.trim() };
+  // No explicit choice — infer. OpenRouter wins ties (widest catalog), then OpenAI, then Mistral.
+  for (const p of ["openrouter", "openai", "mistral"] as const) {
+    if (has(p)) return { provider: p, apiKey: env[PROVIDERS[p].keyVar]!.trim() };
+  }
 
-  return { error: "no API key configured — set OPENROUTER_API_KEY or OPENAI_API_KEY (see .env.example)" };
+  return { error: "no API key configured — set OPENROUTER_API_KEY, OPENAI_API_KEY, or MISTRAL_API_KEY (see .env.example)" };
 }
 
 // --- .env file merge: add/update only the keys we own, leave everything else byte-for-byte ---

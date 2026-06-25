@@ -3,7 +3,7 @@
 // environment. The model is switchable at runtime (/model command); the catalog + per-model
 // context/price come from the provider's own API and degrade gracefully when unavailable.
 import OpenAI from "openai";
-import { resolveProvider, PROVIDERS, reasoningParams, openaiReasons, openaiVision, type Provider } from "./provider";
+import { resolveProvider, PROVIDERS, reasoningParams, openaiReasons, openaiVision, mistralVision, type Provider } from "./provider";
 
 // A provider's key if one is configured right now (env, or a .env that --env-file / onboarding loaded).
 const keyFor = (p: Provider): string | undefined => {
@@ -98,15 +98,25 @@ function isOpenAIChatModel(id: string): boolean {
   return /^(gpt-|o\d|chatgpt-)/.test(id);
 }
 
+function isMistralChatModel(id: string): boolean {
+  return !/embed/.test(id);
+}
+
 // Models served by one provider, tagged with it. OpenAI's /v1/models lists ids only (no pricing/context),
 // so those fields stay 0 and the UI degrades like the OpenRouter miss path.
 async function fetchProviderModels(p: Provider): Promise<ModelInfo[]> {
   const conf = PROVIDERS[p];
   if (p === "openai") {
-    const res = await buildClient(p).models.list(); // GET /v1/models needs the key
+    const res = await buildClient(p).models.list();
     return res.data
       .filter((m) => isOpenAIChatModel(m.id))
       .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true, reasoning: openaiReasons(m.id), vision: openaiVision(m.id), provider: p }));
+  }
+  if (p === "mistral") {
+    const res = await buildClient(p).models.list();
+    return res.data
+      .filter((m) => isMistralChatModel(m.id))
+      .map((m) => ({ id: m.id, name: m.id, context: 0, promptPrice: 0, completionPrice: 0, tools: true, reasoning: false, vision: mistralVision(m.id), provider: p }));
   }
   const res = await fetch(`${conf.baseURL}/models`, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`model catalog fetch failed: ${res.status}`);
@@ -129,8 +139,15 @@ async function fetchProviderModels(p: Provider): Promise<ModelInfo[]> {
 // providers (OpenRouter's "a/b" ids don't collide with OpenAI's bare ids); first match wins if not.
 export async function fetchModels(): Promise<ModelInfo[]> {
   if (catalog) return catalog;
-  const lists = await Promise.all(availableProviders().map((p) => fetchProviderModels(p).catch(() => [] as ModelInfo[])));
-  catalog = lists.flat().sort((a, b) => a.id.localeCompare(b.id));
+  const lists = await Promise.all(availableProviders().map((p) => fetchProviderModels(p).catch((e) => {
+    if (process.env.DEBUG) console.error(`[debug] catalog fetch failed for ${p}: ${e?.message ?? e}`);
+    return [] as ModelInfo[];
+  })));
+  // Dedupe by id, first match wins. Providers (Mistral) list each model once per alias, repeating the
+  // same id — left in, those collide as duplicate keys in the /model picker.
+  const byId = new Map<string, ModelInfo>();
+  for (const m of lists.flat()) if (!byId.has(m.id)) byId.set(m.id, m);
+  catalog = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
   return catalog;
 }
 

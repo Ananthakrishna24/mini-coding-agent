@@ -1,6 +1,6 @@
 // Offline self-check for provider resolution + .env merge — no model/network. Run: npm run check
 import assert from "node:assert/strict";
-import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, openaiVision } from "./provider";
+import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, openaiVision, mistralVision } from "./provider";
 
 // --- resolveProvider ---
 
@@ -8,7 +8,7 @@ import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, o
 {
   const r = resolveProvider({});
   assert.ok("error" in r, "no keys yields an error");
-  assert.match(r.error, /OPENROUTER_API_KEY|OPENAI_API_KEY/, "error names the env vars to set");
+  assert.match(r.error, /OPENROUTER_API_KEY|OPENAI_API_KEY|MISTRAL_API_KEY/, "error names the env vars to set");
 }
 
 // single key → infer that provider
@@ -19,6 +19,10 @@ import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, o
 {
   const r = resolveProvider({ OPENAI_API_KEY: "sk-x" });
   assert.deepEqual(r, { provider: "openai", apiKey: "sk-x" }, "openai inferred from its key");
+}
+{
+  const r = resolveProvider({ MISTRAL_API_KEY: "ms-x" });
+  assert.deepEqual(r, { provider: "mistral", apiKey: "ms-x" }, "mistral inferred from its key");
 }
 
 // both keys, no PROVIDER → openrouter wins the tie
@@ -37,6 +41,22 @@ import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, o
 {
   const r = resolveProvider({ OPENROUTER_API_KEY: "sk-or-x", PROVIDER: "openai" });
   assert.ok("error" in r && /OPENAI_API_KEY/.test(r.error), "PROVIDER=openai needs OPENAI_API_KEY");
+}
+
+// explicit PROVIDER=mistral works
+{
+  const r = resolveProvider({ MISTRAL_API_KEY: "ms-x", PROVIDER: "mistral" });
+  assert.ok(!("error" in r) && r.provider === "mistral", "explicit PROVIDER=mistral works");
+}
+
+// mistral loses tie-break to openrouter and openai
+{
+  const r = resolveProvider({ OPENROUTER_API_KEY: "sk-or-x", MISTRAL_API_KEY: "ms-x" });
+  assert.ok(!("error" in r) && r.provider === "openrouter", "openrouter beats mistral in tie-break");
+}
+{
+  const r = resolveProvider({ OPENAI_API_KEY: "sk-x", MISTRAL_API_KEY: "ms-x" });
+  assert.ok(!("error" in r) && r.provider === "openai", "openai beats mistral in tie-break");
 }
 
 // unknown PROVIDER → error
@@ -98,6 +118,7 @@ assert.deepEqual(reasoningParams("openai", null), {}, "no effort → no params")
 assert.deepEqual(reasoningParams("openrouter", null), {}, "no effort → no params (openrouter)");
 assert.deepEqual(reasoningParams("openai", "high"), { reasoning_effort: "high" }, "openai uses top-level reasoning_effort");
 assert.deepEqual(reasoningParams("openrouter", "low"), { reasoning: { effort: "low" } }, "openrouter wraps it in reasoning.effort");
+assert.deepEqual(reasoningParams("mistral", "high"), {}, "mistral ignores reasoning effort");
 
 // --- openaiReasons: which OpenAI ids take an effort knob ---
 
@@ -113,6 +134,15 @@ for (const id of ["gpt-4o", "gpt-4.1", "gpt-5.5", "o3", "o4-mini", "chatgpt-4o-l
 }
 for (const id of ["gpt-3.5-turbo", "o1-mini", "o3-mini"]) {
   assert.ok(!openaiVision(id), `${id} is text-only`);
+}
+
+// --- mistralVision: pixtral models accept images ---
+
+for (const id of ["pixtral-large-latest", "pixtral-12b-2409"]) {
+  assert.ok(mistralVision(id), `${id} accepts image input`);
+}
+for (const id of ["mistral-large-latest", "mistral-small-latest", "codestral-latest"]) {
+  assert.ok(!mistralVision(id), `${id} is text-only`);
 }
 
 console.log("provider.check.ts ok");
