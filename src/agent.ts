@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
 import { chat, getContextWindow, getProvider } from "./llm";
 import { schemasFor, dispatch, parseFinalAnswer, canSpawn, MAX_DEPTH, MAX_FANOUT, parseSpawnArgs, formatSubResult, type SpawnArgs, type RunResult } from "./tools";
-import { countMessages, overBudget, compact, inputBudget } from "./context";
+import { countMessages, overBudget, compact, inputBudget, formatCompactSummary, COMPACT_PROMPT, microCompact, type CompactionResult } from "./context";
 import { getModelPolicy, setModelPolicy } from "./model_policy";
 import { loadMemory } from "./memory";
 import { skillsPromptBlock } from "./skills";
@@ -57,7 +57,7 @@ function buildSystemPrompt(): string {
   // Changing-last block: environment (changes daily) then memory (changes whenever the agent edits its
   // notes) sit after the fixed rules, so the big cacheable prefix stays byte-identical across runs.
   // Empty when there's no AGENT.md, so a fresh project carries no dangling section.
-  const memory = loadMemory();
+  const memory = loadMemory(process.cwd(), getContextWindow());
   // GPT-5 gets its tuned addendum right after the shared rules (still before the changing env/memory tail,
   // so the cacheable head stays stable within a session). Provider is fixed per session, so this branch is
   // stable too. ponytail: a cross-provider subagent would still get the parent's provider here — the harness
@@ -282,9 +282,54 @@ export async function run(
     ui.context(actual ?? used, budget);
     if (res.usage) ui.usage(res.usage.prompt_tokens ?? 0, res.usage.completion_tokens ?? 0); // feeds /usage
     ui.debug(`context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${budget} budget`);
-    if (overBudget(messages, budget)) {
-      const dropped = compact(messages);
-      ui.warn(`over budget — trimmed ${dropped} old messages from the middle`);
+
+    // ── Tiered compaction ────────────────────────────────────────────────────
+    // Proactive: run compaction BEFORE we're over budget, not after. The three
+    // tiers fire at increasing pressure levels:
+    //  - micro-compact (75%): truncate stale tool results — free, no LLM call
+    //  - LLM summarize (90%): ask the model to produce a structured summary
+    //  - hard-drop (98%): emergency middle-removal, last resort
+    const compaction = compact(messages, budget);
+    if (compaction.tier === "micro") {
+      ui.debug(`micro-compact: ${compaction.description}`);
+    } else if (compaction.tier === "summary") {
+      // Tier 2: LLM-based summarization — ask the model to compress the history.
+      ui.debug(`context pressure high — running LLM summarization`);
+      try {
+        ui.thinking(true, "compacting context");
+        const summaryRes = await chat(
+          [
+            messages[0], // system prompt
+            ...messages.slice(1), // full conversation
+            { role: "user", content: COMPACT_PROMPT },
+          ],
+          undefined, // no tools for summarization
+          opts,
+        );
+        ui.thinking(false);
+        const rawSummary = summaryRes.choices?.[0]?.message?.content ?? "";
+        if (rawSummary.trim()) {
+          const formattedSummary = formatCompactSummary(rawSummary);
+          // Replace everything between system prompt and recent tail with the summary
+          const keepTail = Math.min(8, messages.length - 2);
+          const tail = messages.slice(-keepTail);
+          messages.length = 1; // keep system prompt
+          messages.push({ role: "user", content: formattedSummary });
+          messages.push(...tail);
+          ui.warn(`context summarized — compressed ${compaction.description}`);
+        }
+      } catch (e: any) {
+        // Summarization failed — fall through to hard-drop if still over budget
+        ui.debug(`summarization failed: ${e.message ?? e}`);
+        if (overBudget(messages, budget)) {
+          const result = compact(messages, budget);
+          if (result.tier === "drop") {
+            ui.warn(`emergency: ${result.description}`);
+          }
+        }
+      }
+    } else if (compaction.tier === "drop") {
+      ui.warn(`${compaction.description}`);
     }
   }
 

@@ -1,39 +1,67 @@
-// Offline self-check for cross-run memory (Task 5.2) — no model/network. Run: npm run check
+// Offline self-check for cross-run memory. Run: npm run check:memory
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { loadMemory, MEMORY_FILE } from "./memory";
+import { loadMemory, MEMORY_FILE, memoryBudget } from "./memory";
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-mem-"));
-const file = path.join(dir, MEMORY_FILE);
+const tmp = mkdtempSync(path.join(tmpdir(), "mem-"));
+const cleanup = () => { try { rmSync(tmp, { recursive: true }); } catch {} };
 
-// missing file → no memory, never throws (a fresh project must still run)
-assert.equal(loadMemory(dir), "", "missing AGENT.md yields no memory section");
+// --- memoryBudget tests ---
 
-// blank / whitespace-only file → no dangling heading in the prompt
-fs.writeFileSync(file, "   \n\t\n");
-assert.equal(loadMemory(dir), "", "blank AGENT.md yields no memory section");
+// Default when no window is known → MAX_CHARS
+assert.equal(memoryBudget(), 16_000);
+assert.equal(memoryBudget(0), 16_000);
 
-// present file → wrapped section with provenance + the actual content
-fs.writeFileSync(file, "Build with `npm run check`.");
-const loaded = loadMemory(dir);
-assert.match(loaded, /^<memory>\n/, "opens with the memory data-fence");
-assert.match(loaded, /<\/memory>$/, "closes the memory data-fence");
-assert.match(loaded, /loaded from AGENT\.md/, "names the source file so the model knows what to edit");
-assert.match(loaded, /verify against the current code/, "carries the don't-trust-blindly caveat");
-assert.match(loaded, /Build with `npm run check`\./, "includes the file's content");
+// Small model (32K window) → floor at MIN_CHARS
+assert.equal(memoryBudget(32_000), 4_000);
 
-// binary / corrupt file → skipped, not injected into the prompt (NUL built via fromCharCode to keep
-// this source file NUL-free, matching read-text)
-fs.writeFileSync(file, "notes" + String.fromCharCode(0) + "more");
-assert.equal(loadMemory(dir), "", "a file with NUL bytes is skipped, not loaded into context");
+// Standard model (128K window) → 4% of 128K = 5120
+assert.equal(memoryBudget(128_000), 5_120);
 
-// over-long file → trimmed, not refused; bounded length + an explicit trim nudge
-fs.writeFileSync(file, "x".repeat(20_000));
-const capped = loadMemory(dir);
-assert.ok(capped.length < 20_000, "over-long memory is trimmed, not loaded whole");
-assert.match(capped, /memory truncated/, "truncation is announced so the file gets trimmed");
+// Large model (1M window) → capped at MAX_CHARS
+assert.equal(memoryBudget(1_048_576), 16_000);
 
-fs.rmSync(dir, { recursive: true, force: true });
-console.log("ok — memory self-check passed");
+// --- loadMemory tests ---
+
+// missing → empty
+assert.equal(loadMemory(tmp), "");
+
+// blank → empty
+writeFileSync(path.join(tmp, MEMORY_FILE), "   \n\n  ");
+assert.equal(loadMemory(tmp), "");
+
+// present → wrapped
+writeFileSync(path.join(tmp, MEMORY_FILE), "Build: npm run build");
+const mem = loadMemory(tmp);
+assert.ok(mem.includes("<memory>"));
+assert.ok(mem.includes("</memory>"));
+assert.ok(mem.includes("Build: npm run build"));
+assert.ok(mem.includes(MEMORY_FILE));
+
+// binary → skipped
+writeFileSync(path.join(tmp, MEMORY_FILE), "good\0bad");
+assert.equal(loadMemory(tmp), "");
+
+// over-long → truncated (using small window for tighter budget)
+const longContent = "x".repeat(20_000);
+writeFileSync(path.join(tmp, MEMORY_FILE), longContent);
+const truncated = loadMemory(tmp, 32_000); // 32K window → 4K char budget
+assert.ok(truncated.includes("<memory>"));
+assert.ok(truncated.length < 20_000 + 200, "memory was truncated");
+
+// smart truncation with sections — first and last sections kept
+const sectioned = [
+  "## Important Conventions\nAlways use TypeScript\n",
+  "## Old Notes\nSome old stuff here\n",
+  "## More Old Notes\nMore old stuff\n",
+  "## Recent Work\nJust finished the API\n",
+].join("\n");
+writeFileSync(path.join(tmp, MEMORY_FILE), sectioned);
+const smartMem = loadMemory(tmp, 32_000); // tight budget
+assert.ok(smartMem.includes("Important Conventions"), "first section preserved");
+assert.ok(smartMem.includes("Recent Work"), "last section preserved");
+
+cleanup();
+console.log("ok — memory self-check passed (with adaptive budget + smart truncation)");

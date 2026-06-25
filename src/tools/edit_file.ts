@@ -1,10 +1,12 @@
 // edit_file: surgical edit — replace an exact text block with another, instead of rewriting the file.
 // old_string must match exactly and be unique (unless replace_all), so an edit can't silently hit the
 // wrong spot. This is the tool that makes the prompt's "prefer targeted edits over rewrites" real.
+import fs from "node:fs/promises";
 import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
 import { writeAtomic } from "./atomic";
 import { readTextFile } from "./read-text";
+import { noteFileRead, requireFreshWholeFileRead } from "./file-state";
 
 export const edit_file: Tool = {
   schema: {
@@ -37,6 +39,7 @@ export const edit_file: Tool = {
     if (old_string === new_string) throw new Error("edit_file: 'old_string' and 'new_string' are identical — nothing to change");
 
     const abs = resolveInWorkspace(p);
+    await requireFreshWholeFileRead(abs, "edit_file");
     const text = await readTextFile(abs);
 
     const matches = text.split(old_string).length - 1; // literal count, no regex
@@ -50,6 +53,8 @@ export const edit_file: Tool = {
     // a string replacement would treat $&, $1, etc. in new_string as backreferences.
     const updated = all ? text.split(old_string).join(new_string) : text.replace(old_string, () => new_string);
     await writeAtomic(abs, updated);
+    const stat = await fs.stat(abs);
+    noteFileRead(abs, stat.mtimeMs, false);
 
     const n = all ? matches : 1;
     return `edited ${p} (${n} replacement${n === 1 ? "" : "s"})`;

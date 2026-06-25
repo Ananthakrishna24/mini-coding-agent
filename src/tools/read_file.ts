@@ -1,7 +1,9 @@
 // read_file: read a workspace text file whole, or a line window for paging through big files.
+import fs from "node:fs/promises";
 import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
 import { readTextFile } from "./read-text";
+import { noteFileRead } from "./file-state";
 
 export const read_file: Tool = {
   schema: {
@@ -25,8 +27,14 @@ export const read_file: Tool = {
   },
   async run({ path: p, offset, limit }) {
     if (typeof p !== "string") throw new Error("read_file: 'path' must be a string");
-    const text = await readTextFile(resolveInWorkspace(p));
-    if (offset === undefined && limit === undefined) return text; // whole-file: byte-identical, no header
+    const abs = resolveInWorkspace(p);
+    const text = await readTextFile(abs);
+    const stat = await fs.stat(abs);
+    const isPartialView = offset !== undefined || limit !== undefined;
+    if (!isPartialView) {
+      noteFileRead(abs, stat.mtimeMs, false);
+      return text; // whole-file: byte-identical, no header
+    }
 
     // Validate the optional window at the trust boundary — these come straight from the model.
     const from = offset ?? 1;
@@ -37,6 +45,7 @@ export const read_file: Tool = {
       throw new Error("read_file: 'limit' must be a positive integer");
     }
 
+    noteFileRead(abs, stat.mtimeMs, true);
     const lines = text.split("\n");
     const start = from - 1;
     const end = typeof limit === "number" ? start + limit : undefined;

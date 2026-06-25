@@ -1,7 +1,9 @@
 // write_file: create or overwrite a whole workspace text file. For changing part of a file, use edit_file.
+import fs from "node:fs/promises";
 import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
 import { writeAtomic } from "./atomic";
+import { forgetFileRead, requireFreshWholeFileRead } from "./file-state";
 
 export const write_file: Tool = {
   schema: {
@@ -24,7 +26,15 @@ export const write_file: Tool = {
     if (typeof p !== "string" || typeof content !== "string") {
       throw new Error("write_file: 'path' and 'content' must be strings");
     }
-    await writeAtomic(resolveInWorkspace(p), content);
+    const abs = resolveInWorkspace(p);
+    try {
+      await fs.stat(abs);
+      await requireFreshWholeFileRead(abs, "write_file");
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
+    }
+    await writeAtomic(abs, content);
+    forgetFileRead(abs);
     return `wrote ${Buffer.byteLength(content, "utf8")} bytes to ${p}`;
   },
 };

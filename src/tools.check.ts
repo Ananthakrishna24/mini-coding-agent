@@ -13,9 +13,12 @@ assert.match(big, /chars omitted/);
 
 const f = ".agent-check.tmp";
 
-// write -> read roundtrip (whole file: no header, byte-identical)
+// write -> read roundtrip (whole file: no header, byte-identical). New files can be written;
+// overwriting existing files requires a prior whole-file read.
 assert.match(await dispatch("write_file", JSON.stringify({ path: f, content: "hello" })), /wrote 5 bytes/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: f })), "hello");
+assert.match(await dispatch("write_file", JSON.stringify({ path: f, content: "hello!" })), /wrote 6 bytes/);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: f })), "hello!");
 await fs.rm(f);
 
 // read_file line window: offset/limit page through a file, with a 1-based "# lines X-Y of Z" header
@@ -32,21 +35,37 @@ assert.match(await dispatch("read_file", JSON.stringify({ path: lf, offset: 0 })
 assert.match(await dispatch("read_file", JSON.stringify({ path: lf, limit: -1 })), /'limit' must be a positive integer/);
 await fs.rm(lf);
 
-// edit_file: surgical replace of a unique block, then read it back
+// edit_file: surgical replace of a unique block, then read it back. Existing files must be read
+// first, matching the reference harness's stale-overwrite protection.
 const ef = ".agent-check-edit.tmp";
 await dispatch("write_file", JSON.stringify({ path: ef, content: "alpha\nbeta\ngamma" }));
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /has not been read completely/);
+await dispatch("read_file", JSON.stringify({ path: ef }));
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /1 replacement/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "alpha\nBETA\ngamma");
 // not found / ambiguous / no-op come back as results, never thrown
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "nope", new_string: "x" })), /not found/);
 await dispatch("write_file", JSON.stringify({ path: ef, content: "x x x" }));
+await dispatch("read_file", JSON.stringify({ path: ef }));
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "y" })), /matches 3 places/);
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "x" })), /identical/);
 // replace_all hits every occurrence
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "y", replace_all: true })), /3 replacements/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "y y y");
+// partial reads do not authorize overwriting or editing the whole existing file
+await dispatch("write_file", JSON.stringify({ path: ef, content: "one\ntwo\nthree" }));
+await dispatch("read_file", JSON.stringify({ path: ef, offset: 2, limit: 1 }));
+assert.match(await dispatch("write_file", JSON.stringify({ path: ef, content: "replace" })), /has not been read completely/);
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "two", new_string: "TWO" })), /has not been read completely/);
+// external changes after a read force a re-read before modification
+await dispatch("read_file", JSON.stringify({ path: ef }));
+await new Promise((resolve) => setTimeout(resolve, 5));
+await fs.writeFile(ef, "changed outside tool");
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "changed", new_string: "CHANGED" })), /changed since it was read/);
 // new_string with a $ pattern is inserted literally, not treated as a backreference
+await dispatch("read_file", JSON.stringify({ path: ef }));
 await dispatch("write_file", JSON.stringify({ path: ef, content: "find_me" }));
+await dispatch("read_file", JSON.stringify({ path: ef }));
 await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "find_me", new_string: "$& and $1" }));
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "$& and $1");
 await fs.rm(ef);
@@ -55,7 +74,7 @@ await fs.rm(ef);
 const bigf = ".agent-check-big.tmp";
 await fs.writeFile(bigf, "x".repeat(5 * 1024 * 1024 + 1));
 assert.match(await dispatch("read_file", JSON.stringify({ path: bigf })), /over the 5MB read limit/);
-assert.match(await dispatch("edit_file", JSON.stringify({ path: bigf, old_string: "x", new_string: "y" })), /over the 5MB read limit/);
+assert.match(await dispatch("edit_file", JSON.stringify({ path: bigf, old_string: "x", new_string: "y" })), /has not been read completely/);
 await fs.rm(bigf);
 
 // binary guard: a file with NUL bytes is refused as text (points at run_bash), so decoded garbage
@@ -67,6 +86,39 @@ await fs.rm(binf);
 
 // run_bash returns stdout + exit code
 assert.match(await dispatch("run_bash", JSON.stringify({ command: "echo hi" })), /exit 0\nhi/);
+
+// glob: file discovery by pattern, newest first enough to include the expected workspace-relative path
+await fs.mkdir(".agent-check-search", { recursive: true });
+await fs.writeFile(".agent-check-search/alpha.ts", "export const alpha = 1;\n");
+await fs.writeFile(".agent-check-search/beta.js", "console.log('beta');\n");
+assert.match(
+  await dispatch("glob", JSON.stringify({ pattern: "**/*.ts", path: ".agent-check-search" })),
+  /\.agent-check-search\/alpha\.ts/,
+  "glob finds matching files under a root",
+);
+assert.equal(await dispatch("glob", JSON.stringify({ pattern: "**/*.py", path: ".agent-check-search" })), "no matches");
+assert.match(await dispatch("glob", JSON.stringify({ pattern: "" })), /'pattern' must be a non-empty string/);
+assert.match(await dispatch("glob", JSON.stringify({ pattern: "**/*", limit: 0 })), /'limit' must be a positive integer/);
+
+// grep: rg-quality search primitive with output modes and glob filtering
+assert.match(
+  await dispatch("grep", JSON.stringify({ pattern: "alpha", path: ".agent-check-search", output_mode: "content" })),
+  /\.agent-check-search\/alpha\.ts:1:export const alpha = 1;/,
+  "grep content mode returns file:line:content",
+);
+assert.match(
+  await dispatch("grep", JSON.stringify({ pattern: "alpha", path: ".agent-check-search", output_mode: "files_with_matches", glob: "*.ts" })),
+  /\.agent-check-search\/alpha\.ts/,
+  "grep files_with_matches mode returns matching paths",
+);
+assert.match(
+  await dispatch("grep", JSON.stringify({ pattern: "alpha", path: ".agent-check-search", output_mode: "count" })),
+  /\.agent-check-search\/alpha\.ts:1/,
+  "grep count mode returns file:count",
+);
+assert.equal(await dispatch("grep", JSON.stringify({ pattern: "missing", path: ".agent-check-search" })), "no matches");
+assert.match(await dispatch("grep", JSON.stringify({ pattern: "alpha", output_mode: "bad" })), /output_mode/);
+await fs.rm(".agent-check-search", { recursive: true, force: true });
 
 // trust-boundary failures come back as results, never thrown
 assert.match(await dispatch("read_file", JSON.stringify({ path: "../../../etc/passwd" })), /escapes workspace/);
