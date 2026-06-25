@@ -94,5 +94,21 @@ export function cleanup() {
   active = false;
 }
 
-// A late resize means the old region math is stale; re-pin the same footer at the new size.
-if (out.isTTY) out.on("resize", () => active && setFooter(footer));
+// A resize means the old region math is stale. Reset the region fully, then re-pin the footer at the
+// new geometry. Without the reset, the old DECSTBM row range refers to rows that may no longer exist
+// (terminal shrank) or sit in the wrong place (terminal grew), which corrupts the display.
+if (out.isTTY) {
+  out.on("resize", () => {
+    if (!active) return;
+    // Wipe the old footer at the old geometry, reset the scroll region, then re-pin.
+    let buf = SAVE;
+    for (let r = 0; r < footer.length; r++) buf += `${ESC}[${regionBottom + 1 + r};1H${ESC}[2K`;
+    buf += RESET_REGION + RESTORE;
+    out.write(buf);
+    active = false;
+    // Re-pin with fresh geometry (rows()/cols() now return the new size).
+    const saved = footer;
+    footer = [];
+    setFooter(saved);
+  });
+}

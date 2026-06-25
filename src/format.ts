@@ -24,15 +24,15 @@ const paint = (style: Style, s: string) => (useColor ? styleText(style, s) : s);
 const COLOR_FILE = join(homedir(), ".minicode", "color.txt");
 const DEFAULT_COLOR = "#ff8c00"; // dark orange
 
-export const COLOR_PRESETS: { name: string; hex: string }[] = [
-  { name: "orange", hex: "#ff8c00" },
-  { name: "cyan", hex: "#22d3ee" },
-  { name: "blue", hex: "#3b82f6" },
-  { name: "green", hex: "#22c55e" },
-  { name: "magenta", hex: "#d946ef" },
-  { name: "purple", hex: "#a855f7" },
-  { name: "red", hex: "#ef4444" },
-  { name: "yellow", hex: "#eab308" },
+export const COLOR_PRESETS: { name: string; hex: string; shimmer: string }[] = [
+  { name: "orange", hex: "#ff8c00", shimmer: "#ffb347" },
+  { name: "cyan", hex: "#22d3ee", shimmer: "#67e8f9" },
+  { name: "blue", hex: "#3b82f6", shimmer: "#93bbfd" },
+  { name: "green", hex: "#22c55e", shimmer: "#6ee7a0" },
+  { name: "magenta", hex: "#d946ef", shimmer: "#e879f9" },
+  { name: "purple", hex: "#a855f7", shimmer: "#c084fc" },
+  { name: "red", hex: "#ef4444", shimmer: "#f87171" },
+  { name: "yellow", hex: "#eab308", shimmer: "#fde047" },
 ];
 
 const loadColor = (): string => {
@@ -46,6 +46,12 @@ const loadColor = (): string => {
 
 let primaryHex = loadColor();
 export const getPrimaryColor = () => primaryHex;
+export const getShimmerColor = (): string => {
+  const preset = COLOR_PRESETS.find((p) => p.hex === primaryHex);
+  if (preset) return preset.shimmer;
+  const [r, g, b] = hexToRgb(primaryHex);
+  return `#${[r, g, b].map((c) => Math.min(255, c + 60).toString(16).padStart(2, "0")).join("")}`;
+};
 
 // Accepts a preset name or #rrggbb; resolves, applies for the session, and persists. Returns the hex
 // or null when the input matches neither a preset nor a valid hex.
@@ -163,12 +169,47 @@ const badge = (name: string, failed: boolean) => {
 export const subHeader = (goal: string) => `${badge("spawn_agent", false)} ${c.dim(clip(oneLine(goal), 64))}`;
 export const rail = (depth: number) => (depth > 0 ? c.dim("│ ".repeat(depth)) : "");
 
+// Subagent tree connectors — renders a vertical tree structure for nested agents.
+// `isLast` controls whether to use └─ (last child) or ├─ (continuation).
+export const treeConnector = (isLast: boolean, highlighted = false) =>
+  highlighted ? c.primary(isLast ? "╙─" : "╟─") : c.dim(isLast ? "└─" : "├─");
+export const treeStart = (highlighted = false) =>
+  highlighted ? c.primary("╓─") : c.dim("┌─");
+
+// Shimmer sweep: given a string, a sweep position (0..len+tail), and primary/shimmer hex values,
+// return the string with a 3-char glow window painted in shimmer color, the rest in primary.
+// Used for the prompt border animation while thinking.
+export function shimmerSweep(text: string, pos: number, baseHex: string, glowHex: string): string {
+  if (!useColor) return text;
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const dist = Math.abs(i - pos);
+    if (dist <= 1) out += paintHex(glowHex, text[i]);
+    else out += paintHex(baseHex, text[i]);
+  }
+  return out;
+}
+
 // Live-spinner words. The model phase gets a random gerund each turn so a wait reads like real work,
 // not a frozen "thinking…"; tool calls get a present-tense action ("Reading…") instead of the raw name.
 const THINKING_VERBS = [
-  "Cogitating", "Pondering", "Ruminating", "Musing", "Noodling", "Conjuring",
-  "Percolating", "Brewing", "Simmering", "Tinkering", "Wrangling", "Finagling",
-  "Scheming", "Plotting", "Computing", "Synthesizing", "Deliberating", "Contemplating",
+  "Accomplishing", "Architecting", "Baking", "Beboppin'", "Befuddling", "Blanching",
+  "Bloviating", "Boogieing", "Boondoggling", "Booping", "Bootstrapping", "Brewing",
+  "Bunning", "Burrowing", "Calculating", "Canoodling", "Caramelizing", "Cascading",
+  "Catapulting", "Cerebrating", "Channeling", "Choreographing", "Churning", "Coalescing",
+  "Cogitating", "Combobulating", "Composing", "Computing", "Concocting", "Conjuring",
+  "Considering", "Contemplating", "Cooking", "Crafting", "Creating", "Crunching",
+  "Crystallizing", "Cultivating", "Daydreaming", "Deciphering", "Deliberating", "Devising",
+  "Distilling", "Doodling", "Dreaming", "Effervescing", "Emanating", "Enchanting",
+  "Engineering", "Envisioning", "Extrapolating", "Fabricating", "Fermenting", "Finagling",
+  "Forging", "Formulating", "Galvanizing", "Generating", "Germinating", "Hallucinating",
+  "Harmonizing", "Hatching", "Ideating", "Imagining", "Improvising", "Incubating",
+  "Innovating", "Jamming", "Juggling", "Manifesting", "Marinating", "Meditating",
+  "Minioning", "Mulling", "Musing", "Noodling", "Orchestrating", "Originating",
+  "Percolating", "Plotting", "Pondering", "Puzzling", "Reckoning", "Refining",
+  "Ruminating", "Scheming", "Sculpting", "Simmering", "Sparking", "Spitballing",
+  "Synthesizing", "Tinkering", "Transmuting", "Vibing", "Weaving", "Wrangling",
+  "Zigzagging",
 ];
 export const thinkingVerb = () => THINKING_VERBS[Math.floor(Math.random() * THINKING_VERBS.length)];
 
@@ -322,13 +363,37 @@ function artRow(line: string): { t: string; s: (x: string) => string } {
 
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
+// Fractional block-char progress bar (matches the reference design's ProgressBar component).
+const BLOCKS = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
+export function progressBar(ratio: number, width: number): string {
+  const r = Math.min(1, Math.max(0, ratio));
+  const whole = Math.floor(r * width);
+  let bar = BLOCKS[BLOCKS.length - 1].repeat(whole);
+  if (whole < width) {
+    const remainder = r * width - whole;
+    bar += BLOCKS[Math.floor(remainder * BLOCKS.length)];
+    const empty = width - whole - 1;
+    if (empty > 0) bar += BLOCKS[0].repeat(empty);
+  }
+  return bar;
+}
+
+// Horizontal divider with an optional centered title — matches the reference design's Divider.
+export function divider(width?: number, title?: string): string {
+  const w = width ?? termWidth();
+  if (!title) return c.dim("─".repeat(w));
+  const tLen = visibleLen(title) + 2;
+  const side = Math.max(0, w - tLen);
+  const left = Math.floor(side / 2);
+  return c.dim("─".repeat(left) + " ") + title + c.dim(" " + "─".repeat(side - left));
+}
+
 export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
   const title = `MiniCode v${VERSION}`;
   const art = minionArt.map(artRow);
   const artW = Math.max(...art.map((a) => a.t.length));
 
-  // The welcome text, set beside the mascot rather than stacked under it.
-  const text: { t: string; s?: (x: string) => string }[] = [
+  const leftText: { t: string; s?: (x: string) => string }[] = [
     { t: `model    ${info?.id ?? id}` },
     ...(info
       ? [
@@ -337,36 +402,70 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
         ]
       : []),
     { t: `dir      ${clip(cwd, 48)}` },
-    { t: "" },
-    { t: "type a goal  ·  /help for commands  ·  'exit' to quit" },
   ];
 
-  // Pair the columns row-by-row, vertically centering the shorter (text) block against the taller (art).
-  const height = Math.max(art.length, text.length);
-  const top = Math.floor((height - text.length) / 2);
-  const body = Array.from({ length: height }, (_, i) => {
+  // Right panel: colored headers + dim body, structured like the reference.
+  type RightLine = { t: string; style: "header" | "dim" };
+  const rightLines: RightLine[] = [
+    { t: "Tips", style: "header" },
+    { t: "type a goal to start working", style: "dim" },
+    { t: "/help for commands", style: "dim" },
+    { t: "/model to switch models", style: "dim" },
+    { t: "", style: "dim" },
+    { t: "Shortcuts", style: "header" },
+    { t: "Ctrl+V  paste an image", style: "dim" },
+    { t: "Ctrl+O  expand output", style: "dim" },
+    { t: "'exit'  to quit", style: "dim" },
+  ];
+
+  // Left column: art + model info, paired row-by-row.
+  const leftH = Math.max(art.length, leftText.length);
+  const lOff = Math.floor((leftH - leftText.length) / 2);
+  const leftCol = Array.from({ length: leftH }, (_, i) => {
     const a = art[i];
-    const left = a ? a.s(a.t.padEnd(artW)) : " ".repeat(artW);
-    const r = text[i - top];
-    const right = r ? (r.s ? r.s(r.t) : c.dim(r.t)) : "";
-    return `${left}    ${right}`;
+    const al = a ? a.s(a.t.padEnd(artW)) : " ".repeat(artW);
+    const r = leftText[i - lOff];
+    const rl = r ? (r.s ? r.s(r.t) : c.dim(r.t)) : "";
+    return `${al}    ${rl}`;
+  });
+  const leftW = Math.max(...leftCol.map(visibleLen));
+
+  const rightPlainW = Math.max(...rightLines.map((r) => r.t.length));
+  const totalH = Math.max(leftH, rightLines.length);
+  const rOff = Math.floor((totalH - rightLines.length) / 2);
+
+  // Inner width: left + gap + divider + gap + right. -6 for Ink indent + outer borders.
+  const innerW = Math.max(leftW + 3 + rightPlainW, termWidth() - 6);
+  const divCol = leftW + 1; // visible column of the vertical divider
+
+  const body = Array.from({ length: totalH }, (_, i) => {
+    const left = i < leftCol.length ? leftCol[i] : "";
+    const padL = " ".repeat(Math.max(0, divCol - visibleLen(left)));
+    const div = c.dim("│");
+    const rl = rightLines[i - rOff];
+    let right = "";
+    if (rl) {
+      right = rl.style === "header" ? c.bold(c.primary(rl.t)) : (rl.t ? c.dim(rl.t) : "");
+    }
+    const usedRight = rl ? rl.t.length : 0;
+    const padR = " ".repeat(Math.max(0, innerW - divCol - 2 - usedRight));
+    return `${left}${padL}${div} ${right}${padR}`;
   });
 
-  // Blank padding rows top and bottom so the art breathes evenly inside the frame.
   const lines = ["", ...body, ""];
+  const w = innerW;
+  const pad = (s: string) => s + " ".repeat(Math.max(0, w - visibleLen(s)));
 
-  // Full-width box: the frame extends end to end, content left-aligned inside.
-  // Measure *visible* width so ANSI colour codes don't throw the right border off. -6 accounts for
-  // the 2-space indent in the Ink UI + the "│ " / " │" borders on each side.
-  const contentW = Math.max(...lines.map(visibleLen));
-  const w = Math.max(contentW, termWidth() - 6);
-  const pad = (s: string) => s + " ".repeat(w - visibleLen(s));
-
-  // Top border with the title embedded top-left: ╭─ MiniCode ──…──╮. The title wears the primary
-  // accent; the dashes fill the rest so the rule matches the bottom border's visible width (w + 4).
+  // Top/bottom borders with T-junctions at the divider column.
   const titleStr = c.bold(c.primary(title));
-  const titleW = visibleLen(titleStr);
-  const topRule = c.primary("╭─ ") + titleStr + c.primary(" " + "─".repeat(Math.max(0, w - titleW - 1)) + "╮");
-  const bottomRule = c.primary("╰" + "─".repeat(w + 2) + "╯");
+  const topPrefix = "─ " + title + " ";
+  const topPrefixLen = topPrefix.length;
+  const topDash = (n: number) => "─".repeat(Math.max(0, n));
+  // Build top rule: ╭─ Title ──…──┬──…──╮  (T-junction at divCol+1 since the "│ " border adds 2)
+  const divPos = divCol + 1; // +1 because content starts after "│ "
+  const beforeDiv = divPos - topPrefixLen;
+  const afterDiv = w - divPos;
+  const topRule = c.primary("╭─ ") + titleStr + c.primary(" " + topDash(beforeDiv) + "┬" + topDash(afterDiv) + "╮");
+  const bottomRule = c.primary("╰" + topDash(divPos) + "┴" + topDash(afterDiv) + "╯");
   return [topRule, ...lines.map((s) => `${c.primary("│")} ${pad(s)} ${c.primary("│")}`), bottomRule];
 }

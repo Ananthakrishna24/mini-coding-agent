@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { setFooter, clearFooter, cleanup as screenCleanup } from "./screen";
 import type { ModelInfo } from "./llm";
 import type { ModelPolicy } from "./model_policy";
-import { c, wrap, visibleLen, termWidth, iconize, toolEntry, resultBody, bannerLines, subHeader, rail } from "./format";
+import { c, wrap, visibleLen, termWidth, iconize, toolEntry, resultBody, bannerLines, subHeader, rail, paintHex, getShimmerColor, progressBar } from "./format";
 
 export { describeModel } from "./format";
 
@@ -60,7 +60,8 @@ export function createUI(): UI {
       return false;
     }
     const width = Math.min(termWidth(), 100);
-    const status = `${modelLabel}${ctxPct != null ? ` · ctx ${ctxPct}%` : ""}`.trim();
+    const ctxBar = ctxPct != null ? ` ${c.primary(progressBar(ctxPct / 100, 20))} ctx ${ctxPct}%` : "";
+    const status = `${modelLabel}${ctxBar}`.trim();
     const MAX_STEPS = 8;
     const shown = plan.slice(0, MAX_STEPS).map((r) => ` ${r}`);
     const more = plan.length > MAX_STEPS ? [c.dim(`   … +${plan.length - MAX_STEPS} more`)] : [];
@@ -82,7 +83,10 @@ export function createUI(): UI {
       if (timer) return;
       process.stdout.write(HIDE);
       timer = setInterval(() => {
-        process.stdout.write(`${CLEAR}  ${rail(nest)}${c.primary(SPIN[(i = (i + 1) % SPIN.length)])} ${c.dim(label + "…")}`);
+        i = (i + 1) % SPIN.length;
+        const shimmer = Math.floor(i / 4) % 2 === 0;
+        const paint = shimmer ? (s: string) => paintHex(getShimmerColor(), s) : c.primary;
+        process.stdout.write(`${CLEAR}  ${rail(nest)}${paint(SPIN[i])} ${c.dim(label + "…")}`);
       }, 80);
     } else if (timer) {
       clearInterval(timer);

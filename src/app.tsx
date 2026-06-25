@@ -2,9 +2,9 @@
 // lives in <Static> so it commits once and scrolls naturally; the live region below holds the
 // plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, type Item, type Picker, type ResumePicker } from "./store";
-import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail } from "./format";
+import { Box, Text, Static, useApp, useInput, useStdout } from "ink";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, toggleExpandLast, type Item, type Picker, type ResumePicker } from "./store";
+import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, getShimmerColor, COLOR_PRESETS, paintHex, subHeader, rail, shimmerSweep, treeStart } from "./format";
 import { clipboardImageToTemp } from "./images";
 import { matchFiles } from "./tools/workspace";
 import { Onboarding } from "./onboarding";
@@ -12,6 +12,7 @@ import { Onboarding } from "./onboarding";
 const indent = (s: string) => `  ${s}`;
 
 const FILE_MENU = 8; // rows shown in the @-file picker
+const EXPANDED_ROWS = 32; // max rows when a tool item is expanded via Ctrl+O
 
 function ItemView({ item }: { item: Item }) {
   const r = rail(item.depth ?? 0); // left gutter that nests a subagent's items one level in
@@ -33,20 +34,24 @@ function ItemView({ item }: { item: Item }) {
           ))}
         </Box>
       );
-    case "subagent": // delegation header: the AGENT badge + the subagent's goal, opening the nested block
+    case "subagent":
       return (
         <Box marginTop={1}>
-          <Text>{ind(subHeader(item.goal))}</Text>
+          <Text>{`  ${r}${treeStart(true)} ${subHeader(item.goal)}`}</Text>
         </Box>
       );
     case "tool": {
       const { header, rows } = toolEntry(item.name, item.args, item.result);
+      const maxRows = item.expanded ? EXPANDED_ROWS : rows.length;
+      const shown = rows.slice(0, maxRows);
+      const hidden = rows.length - maxRows;
       return (
         <Box flexDirection="column" marginTop={1}>
           <Text>{ind(header)}</Text>
-          {rows.map((row, i) => (
+          {shown.map((row, i) => (
             <Text key={i}>{`    ${r}${c.dim(i === 0 ? "⎿" : " ")} ${row}`}</Text>
           ))}
+          {hidden > 0 && <Text>{`    ${r}${c.dim(`  … +${hidden} lines (Ctrl+O to expand)`)}`}</Text>}
         </Box>
       );
     }
@@ -79,10 +84,12 @@ function Spinner({ label }: { label: string }) {
     const t = setInterval(() => setF((n) => n + 1), 80);
     return () => clearInterval(t);
   }, []);
-  return <Text>{`${c.primary(SPIN[f % SPIN.length])} ${c.dim(`${label}…`)}`}</Text>;
+  const shimmer = Math.floor(f / 4) % 2 === 0;
+  const paint = shimmer ? (s: string) => paintHex(getShimmerColor(), s) : c.primary;
+  return <Text>{`${paint(SPIN[f % SPIN.length])} ${c.dim(`${label}…`)}`}</Text>;
 }
 
-// Live status under the scrollback: spinner while working, the plan checklist, and the model · ctx line.
+// Live status under the scrollback: spinner while working and the plan checklist.
 function Footer() {
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const planRows = s.plan.slice(0, 8);
@@ -103,7 +110,7 @@ function Footer() {
           {s.plan.length > 8 && <Text>{indent(c.dim(`… +${s.plan.length - 8} more`))}</Text>}
         </>
       )}
-      {s.modelLabel && <Text>{indent(c.dim(`${s.modelLabel}${s.ctxPct != null ? ` · ctx ${s.ctxPct}%` : ""}`))}</Text>}
+      {s.modelLabel && <Text>{indent(c.dim(s.modelLabel))}</Text>}
     </Box>
   );
 }
@@ -176,9 +183,10 @@ function ColorPickerView({ sel }: { sel: number }) {
         const nameStr = p.name.padEnd(8);
         const marker = active ? c.primary("›") : " ";
         const dot = paintHex(p.hex, p.hex === cur ? "●" : "○");
+        const shimmerDot = paintHex(p.shimmer, "○");
         const name = active ? c.bold(nameStr) : nameStr;
         return (
-          <Text key={p.hex}>{`  ${marker} ${dot} ${name} ${c.dim(p.hex)}`}</Text>
+          <Text key={p.hex}>{`  ${marker} ${dot}${shimmerDot} ${name} ${c.dim(p.hex)}`}</Text>
         );
       })}
       <Text>{c.dim("  custom: /colors #rrggbb")}</Text>
@@ -217,13 +225,41 @@ function EffortPickerView({ sel }: { sel: number }) {
   );
 }
 
+// Animated prompt border: left-to-right shimmer sweep on top/bottom lines while busy.
+// No left/right borders — matching the reference's open-side layout.
+function useShimmerBorder(width: number, busy: boolean) {
+  const [pos, setPos] = useState(0);
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => setPos((n) => (n + 1) % (width + 20)), 50);
+    return () => clearInterval(t);
+  }, [busy, width]);
+
+  const bar = "─".repeat(width);
+  if (!busy) {
+    const line = c.primary(bar);
+    return { top: line, bot: line };
+  }
+  const base = getPrimaryColor();
+  const glow = getShimmerColor();
+  const sweepPos = pos - 10;
+  return {
+    top: shimmerSweep(bar, sweepPos, base, glow),
+    bot: shimmerSweep(bar, sweepPos, base, glow),
+  };
+}
+
+
 function Prompt() {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const busy = s.busy;
   const [buf, setBuf] = useState("");
   const [sel, setSel] = useState(0);
   const [fileSel, setFileSel] = useState(0);
+
+  const termW = stdout?.columns ?? 80;
 
   // "/" menu: filter commands by the first token while it has no space yet.
   const firstTok = buf.split(/\s+/)[0];
@@ -278,6 +314,8 @@ function Prompt() {
       if (key.downArrow) return effortPickerMove(1);
       return;
     }
+    // Ctrl+O: expand/collapse last tool output
+    if (key.ctrl && input === "o") return toggleExpandLast();
     if (busy) return; // one run at a time — ignore typing while the agent works
     if (key.ctrl && (input === "v" || input === "\x16")) {
       void clipboardImageToTemp().then((p) => {
@@ -318,6 +356,9 @@ function Prompt() {
     if (input && !key.ctrl && !key.meta) setBuf((b) => b + input);
   });
 
+  // Hook must be called unconditionally (before any early return) to satisfy React's rules of hooks.
+  const border = useShimmerBorder(termW, busy);
+
   if (s.picker) return <PickerView picker={s.picker} />;
   if (s.resumePicker) return <ResumePickerView picker={s.resumePicker} />;
   if (s.policyPicker) return <PolicyPickerView sel={s.policyPicker.sel} />;
@@ -326,11 +367,9 @@ function Prompt() {
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box borderStyle="round" borderColor={busy ? "yellow" : getPrimaryColor()} paddingX={1} width="100%">
-        <Text>{c.primary("›")} </Text>
-        <Text>{busy ? c.dim(buf || "working…") : buf}</Text>
-        {!busy && <Text>{c.dim("▏")}</Text>}
-      </Box>
+      <Text>{border.top}</Text>
+      <Text>{`${busy ? paintHex(getShimmerColor(), "◆") : c.primary("❯")} ${busy ? c.dim(buf || "working…") : buf}${!busy ? c.dim("▏") : ""}`}</Text>
+      <Text>{border.bot}</Text>
       {menu.length > 0 && (
         <Box flexDirection="column" paddingLeft={1}>
           {menu.map((m, i) => (

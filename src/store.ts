@@ -17,7 +17,7 @@ import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, se
 // all land here and render in Ink's <Static> region so they persist as the log scrolls.
 // `depth` is the subagent nesting level (0 = the top agent); the UI rails an item one gutter in per
 // level so a subagent's activity reads as the subagent's, not the parent's.
-export type Item = { id: number; depth?: number } & (
+export type Item = { id: number; depth?: number; expanded?: boolean } & (
   | { kind: "user"; text: string }
   | { kind: "tool"; name: string; args: string; result: string }
   | { kind: "warn"; text: string }
@@ -56,6 +56,7 @@ export type State = {
   colorPicker: { sel: number } | null; // the /colors overlay: ↑↓ to move, ⏎ to apply, esc to cancel
   effortPicker: { sel: number } | null; // the reasoning-effort overlay, opened after picking a reasoning model
   setup: boolean; // the /setup overlay: re-run onboarding (pick provider, add a key) without restarting
+  showContext: boolean; // reserved for future use
   gen: number; // bumped on /clear so <Static> remounts and reprints from scratch (see app.tsx)
 };
 
@@ -81,6 +82,7 @@ let state: State = {
   colorPicker: null,
   effortPicker: null,
   setup: false,
+  showContext: false,
   gen: 0,
 };
 
@@ -120,6 +122,20 @@ export const store = {
   },
   getSnapshot: () => state,
 };
+
+// Ctrl+O: toggle expanded/collapsed on the most recent tool item (or all if none focused).
+export function toggleExpandLast() {
+  const items = [...state.items];
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === "tool") {
+      items[i] = { ...items[i], expanded: !items[i].expanded };
+      set({ items });
+      return;
+    }
+  }
+}
+
+export const toggleContext = () => set({ showContext: !state.showContext });
 
 let currentInfo: ModelInfo | undefined; // active model's catalog entry, for pricing /usage + /status
 
@@ -497,16 +513,13 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
     }
     case "/context": {
       const win = getContextWindow();
-      const pct = state.ctxPct;
+      const pct = state.ctxPct ?? 0;
       return push({
         kind: "info",
         lines: [
-          c.bold("context window"),
+          c.bold("context"),
           `  window   ${fmtTokens(win)} tokens`,
-          `  budget   ${fmtTokens(inputBudget(win))} tokens (window minus output + safety reserve)`,
-          pct == null
-            ? c.dim("  usage    — (run something first)")
-            : `  usage    ${state.ctxUsed.toLocaleString()} / ${state.ctxBudget.toLocaleString()} tokens (${pct}%)`,
+          `  used     ${state.ctxUsed.toLocaleString()} / ${state.ctxBudget.toLocaleString()} tokens (${pct}%)`,
         ],
       });
     }
