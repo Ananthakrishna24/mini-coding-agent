@@ -24,16 +24,20 @@ export const run_bash: Tool = {
       },
     },
   },
-  async run({ command }) {
+  async run({ command }, signal) {
     if (typeof command !== "string") throw new Error("run_bash: 'command' must be a string");
     try {
       const { stdout, stderr } = await execFileAsync("bash", ["-c", command], {
         cwd: WORKSPACE,
         timeout: TIMEOUT_MS, // capResult trims the output later
         maxBuffer: 10 * 1024 * 1024, // let verbose runs finish instead of dying on ENOBUFS
+        signal,
       });
       return `exit 0\n${stdout}${stderr}`;
     } catch (e: any) {
+      if (e.name === "AbortError" || (e.killed && e.signal === "SIGTERM" && signal?.aborted)) {
+        return `error: command interrupted by user\n${e.stdout ?? ""}${e.stderr ?? ""}`;
+      }
       // Timeout: execFile kills the process, so there's no exit code — say so plainly, not "exit ?".
       if (e.killed && e.signal) {
         return `error: command timed out after ${TIMEOUT_MS / 1000}s\n${e.stdout ?? ""}${e.stderr ?? ""}`;

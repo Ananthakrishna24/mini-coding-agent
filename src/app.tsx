@@ -3,7 +3,7 @@
 // plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, type Item, type Picker, type ResumePicker } from "./store";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, interrupt, type Item, type Picker, type ResumePicker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail, termWidth, fmtPrice } from "./format";
 import { clipboardImageToTemp } from "./images";
 import { matchFiles } from "./tools/workspace";
@@ -73,13 +73,87 @@ function ItemView({ item }: { item: Item }) {
 }
 
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function ShimmerText({ label, f }: { label: string; f: number }) {
+  const message = `${label}…`;
+  const cycleLength = message.length + 15;
+  const glimmerIndex = f % cycleLength;
+
+  return (
+    <Box flexDirection="row">
+      {[...message].map((char, index) => {
+        const isHighlighted = index === glimmerIndex;
+        const isNearHighlight = Math.abs(index - glimmerIndex) === 1;
+        const shouldUseShimmer = isHighlighted || isNearHighlight;
+
+        return (
+          <Text
+            key={index}
+            color={getPrimaryColor()}
+            dimColor={!shouldUseShimmer}
+            bold={shouldUseShimmer}
+          >
+            {char}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+}
+
 function Spinner({ label }: { label: string }) {
   const [f, setF] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setF((n) => n + 1), 80);
     return () => clearInterval(t);
   }, []);
-  return <Text>{`${c.primary(SPIN[f % SPIN.length])} ${c.dim(`${label}…`)}`}</Text>;
+
+  const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const subagents = s.subagents || [];
+
+  if (subagents.length === 0) {
+    return (
+      <Box flexDirection="row">
+        <Text color={getPrimaryColor()}>{SPIN[f % SPIN.length]} </Text>
+        <ShimmerText label={label} f={f} />
+      </Box>
+    );
+  }
+
+  const formatGoal = (goal: string, limit = 40) => {
+    const clean = goal.replace(/\s+/g, " ").trim();
+    if (clean.length <= limit) return clean;
+    return `${clean.slice(0, limit - 3)}...`;
+  };
+
+  return (
+    <Box flexDirection="column">
+      {/* Top level leader */}
+      <Box flexDirection="row">
+        <Text color="gray">┌─ team-lead</Text>
+        <Text color="gray" dimColor> (waiting)</Text>
+      </Box>
+
+      {/* Nested parent subagents */}
+      {subagents.slice(0, -1).map((goal, i) => (
+        <Box flexDirection="row" key={i}>
+          <Text color="gray">{"│  ".repeat(i + 1)}├─ </Text>
+          <Text color="gray" dimColor>{formatGoal(goal)} (waiting)</Text>
+        </Box>
+      ))}
+
+      {/* Deepest/active subagent */}
+      <Box flexDirection="row">
+        <Text color="gray">{"│  ".repeat(subagents.length - 1)}└─ </Text>
+        <Text color={getPrimaryColor()}>{SPIN[f % SPIN.length]} </Text>
+        <Text color="magenta" bold>subagent-{subagents.length}: </Text>
+        <Text color="gray" dimColor>{formatGoal(subagents[subagents.length - 1])} </Text>
+        <Text color="gray" dimColor>(</Text>
+        <ShimmerText label={label} f={f} />
+        <Text color="gray" dimColor>)</Text>
+      </Box>
+    </Box>
+  );
 }
 
 // Live status under the scrollback: the plan checklist in a styled cyan card.
@@ -318,7 +392,12 @@ function Prompt() {
       if (key.downArrow) return effortPickerMove(1);
       return;
     }
-    if (busy) return; // one run at a time — ignore typing while the agent works
+    if (busy) {
+      if (key.escape) {
+        interrupt();
+      }
+      return; // one run at a time — ignore typing while the agent works
+    }
     if (input === "?" && !buf) {
       setBuf("");
       void submit("/help", exit);
@@ -422,11 +501,21 @@ function Prompt() {
 
   return (
     <Box flexDirection="column" marginTop={1}>
+      {/* Thinking spinner on top of the text input box when busy */}
+      {busy && (
+        <Box paddingX={1} marginBottom={0} width="100%">
+          <Spinner label={s.spinner || "Working"} />
+        </Box>
+      )}
+
       {/* Input row */}
       <Box borderStyle="single" borderLeft={false} borderRight={false} borderColor={getPrimaryColor()} paddingX={1} width="100%">
-        <Text>{busy ? c.yellow("⠋ ") : c.primary("› ")}</Text>
+        <Text>{c.primary("› ")}</Text>
         {busy ? (
-          <Spinner label={s.spinner || "Working"} />
+          <Box flexGrow={1} justifyContent="space-between">
+            <Text>{c.dim("")}</Text>
+            <Text>{c.dim("press esc to interrupt")}</Text>
+          </Box>
         ) : (
           <Text>{isDimPrompt ? c.dim(inputText || "Type a goal or command...") : inputText}</Text>
         )}

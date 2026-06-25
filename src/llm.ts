@@ -53,21 +53,21 @@ let client = buildClient(provider); // rebuilt by setModel when the active model
 export async function chat(
   messages: OpenAI.ChatCompletionMessageParam[],
   tools?: OpenAI.ChatCompletionTool[],
-  opts?: { model?: string; effort?: string | null },
+  opts?: { model?: string; effort?: string | null; signal?: AbortSignal },
 ) {
   const useModel = opts?.model ?? model;
   const useEffort = opts && "effort" in opts ? opts.effort ?? null : effort;
   const base = { model: useModel, messages, ...(tools ? { tools, tool_choice: "auto" } : {}) };
-  const create = (extra: Record<string, unknown>) =>
+  const create = (extra: Record<string, unknown>, reqOpts?: { signal?: AbortSignal }) =>
     // cast: `reasoning` (OpenRouter) isn't in the SDK type
-    client.chat.completions.create({ ...base, ...extra } as OpenAI.ChatCompletionCreateParamsNonStreaming);
+    client.chat.completions.create({ ...base, ...extra } as OpenAI.ChatCompletionCreateParamsNonStreaming, reqOpts);
   try {
-    return await create(reasoningParams(provider, useEffort)); // reasoning_effort / reasoning.effort, only when set
+    return await create(reasoningParams(provider, useEffort), opts?.signal ? { signal: opts.signal } : undefined); // reasoning_effort / reasoning.effort, only when set
   } catch (e: any) {
     // gpt-5.5/5.4 reject reasoning_effort alongside function tools on Chat Completions ("use /v1/responses").
     // Retry once without the effort knob so the call still lands — models that accept it (o-series, gpt-5.1)
     // never hit this path. Degrade the knob, not the request; the full fix is the Responses API.
-    if (useEffort && e?.status === 400 && /reasoning_effort/i.test(String(e?.message))) return await create({});
+    if (useEffort && e?.status === 400 && /reasoning_effort/i.test(String(e?.message))) return await create({}, opts?.signal ? { signal: opts.signal } : undefined);
     throw e;
   }
 }

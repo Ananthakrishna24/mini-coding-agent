@@ -87,6 +87,13 @@ await fs.rm(binf);
 // run_bash returns stdout + exit code
 assert.match(await dispatch("run_bash", JSON.stringify({ command: "echo hi" })), /exit 0\nhi/);
 
+// run_bash with AbortSignal
+const controller = new AbortController();
+const bashPromise = dispatch("run_bash", JSON.stringify({ command: "sleep 10" }), controller.signal);
+controller.abort();
+const bashResult = await bashPromise;
+assert.match(bashResult, /error: command interrupted by user/);
+
 // glob: file discovery by pattern, newest first enough to include the expected workspace-relative path
 await fs.mkdir(".agent-check-search", { recursive: true });
 await fs.writeFile(".agent-check-search/alpha.ts", "export const alpha = 1;\n");

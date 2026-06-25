@@ -60,6 +60,7 @@ export type State = {
   effortPicker: { sel: number } | null; // the reasoning-effort overlay, opened after picking a reasoning model
   setup: boolean; // the /setup overlay: re-run onboarding (pick provider, add a key) without restarting
   gen: number; // bumped on /clear so <Static> remounts and reprints from scratch (see app.tsx)
+  subagents: string[]; // list of active subagent goals representing the call stack
 };
 
 // Effort levels offered after a reasoning model is picked. "default" sends no effort param (the model's
@@ -88,6 +89,7 @@ let state: State = {
   effortPicker: null,
   setup: false,
   gen: 0,
+  subagents: [],
 };
 
 // The live message array for this session, threaded through every top-level run so the model sees the
@@ -133,14 +135,17 @@ let currentInfo: ModelInfo | undefined; // active model's catalog entry, for pri
 export const ui: UI = {
   thinking: (on, label = "thinking") => set({ spinner: on ? label : null }),
   thought: (seconds) => push({ kind: "info", lines: [c.dim(`✦ thought for ${seconds}s`)] }),
-  // Open a delegation block (header at the parent level), then nest what the subagent does one level in.
   enterSubagent: (goal) => {
     push({ kind: "subagent", goal });
     nest++;
+    set({ subagents: [...state.subagents, goal] });
   },
   // Close the block: drop back a level, then print the subagent's ✓/✗ summary aligned with its header.
   exitSubagent: (result) => {
     nest = Math.max(0, nest - 1);
+    const nextSubagents = [...state.subagents];
+    nextSubagents.pop();
+    set({ subagents: nextSubagents });
     push({ kind: "info", lines: [`${c.dim("⎿")} ${result}`] });
   },
   tool: (name, args, result) => {
@@ -154,7 +159,7 @@ export const ui: UI = {
   debug: (msg) => void (process.env.DEBUG && push({ kind: "warn", text: msg })),
   startRun: () => {
     nest = 0; // a prior run that died mid-delegation must not leave the next one indented
-    set({ plan: [], planDone: 0, planTotal: 0, ctxPct: null });
+    set({ plan: [], planDone: 0, planTotal: 0, ctxPct: null, subagents: [] });
   },
   endRun: () => set({ spinner: null }),
   setModelLabel: (modelLabel) => set({ modelLabel }),
@@ -232,6 +237,14 @@ function refreshBanner() {
   emit();
 }
 
+let abortController: AbortController | null = null;
+
+export function interrupt() {
+  if (state.busy && abortController) {
+    abortController.abort();
+  }
+}
+
 // Run a goal through the agent, streaming events into the store. One run at a time (busy guard).
 async function runGoal(goal: string) {
   if (state.busy) return;
@@ -246,14 +259,20 @@ async function runGoal(goal: string) {
   set({ busy: true });
   ui.startRun();
   const t0 = Date.now();
+  abortController = new AbortController();
   try {
-    const r = await run(content, ui, 0, conversation); // same array every turn = the model keeps the thread
+    const r = await run(content, ui, 0, conversation, { signal: abortController.signal }); // same array every turn = the model keeps the thread
     push({ kind: "result", success: r.success, summary: r.summary, ms: Date.now() - t0 });
   } catch (e: any) {
-    push({ kind: "result", success: false, summary: `agent failed: ${e.message ?? e}`, ms: Date.now() - t0 });
+    if (abortController.signal.aborted || e.name === "AbortError" || e.message === "The user aborted a request.") {
+      push({ kind: "result", success: false, summary: "Interrupted by user", ms: Date.now() - t0 });
+    } else {
+      push({ kind: "result", success: false, summary: `agent failed: ${e.message ?? e}`, ms: Date.now() - t0 });
+    }
   } finally {
     ui.endRun();
     set({ busy: false });
+    abortController = null;
     persist();
   }
 }

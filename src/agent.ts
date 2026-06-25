@@ -102,7 +102,7 @@ export async function run(
   ui: UI,
   depth = 0,
   history?: OpenAI.ChatCompletionMessageParam[],
-  opts?: { model?: string; effort?: string | null },
+  opts?: { model?: string; effort?: string | null; signal?: AbortSignal },
 ): Promise<RunResult> {
   const messages: OpenAI.ChatCompletionMessageParam[] = history ?? [];
   if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
@@ -115,9 +115,20 @@ export async function run(
   let stall = 0; // consecutive turns with no real progress; trips STALL_LIMIT before MAX_TURNS
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    if (opts?.signal?.aborted) {
+      return { success: false, summary: "Interrupted by user" };
+    }
     ui.thinking(true, thinkingVerb());
     const t0 = Date.now();
-    const res = await chat(messages, schemas, opts);
+    let res;
+    try {
+      res = await chat(messages, schemas, opts);
+    } catch (e: any) {
+      if (opts?.signal?.aborted || e.name === "AbortError" || e.message === "The user aborted a request.") {
+        return { success: false, summary: "Interrupted by user" };
+      }
+      throw e;
+    }
     ui.thinking(false);
     const choice = res.choices?.[0];
     if (!choice) throw new Error("model returned no choices");
@@ -165,6 +176,9 @@ export async function run(
     let fanout = 0;
 
     for (let idx = 0; idx < calls.length; idx++) {
+      if (opts?.signal?.aborted) {
+        return { success: false, summary: "Interrupted by user" };
+      }
       const call = calls[idx];
       if (call.type !== "function") {
         results[idx] = `error: unsupported tool call type '${call.type}'`;
@@ -233,7 +247,7 @@ export async function run(
           (async () => {
             let sub: RunResult;
             try {
-              sub = await run(sa.goal, childUI, depth + 1, subHistory!, { model: subModel, effort: subEffort });
+              sub = await run(sa.goal, childUI, depth + 1, subHistory!, { model: subModel, effort: subEffort, signal: opts?.signal });
             } catch (e: any) {
               sub = { success: false, summary: `subagent crashed: ${e.message ?? e}` };
             }
@@ -247,11 +261,25 @@ export async function run(
         continue;
       }
 
+      if (opts?.signal?.aborted) {
+        return { success: false, summary: "Interrupted by user" };
+      }
       ui.thinking(true, toolVerb(call.function.name));
-      const result = await dispatch(call.function.name, call.function.arguments);
+      let result;
+      try {
+        result = await dispatch(call.function.name, call.function.arguments, opts?.signal);
+      } catch (e: any) {
+        if (opts?.signal?.aborted || e.name === "AbortError") {
+          return { success: false, summary: "Interrupted by user" };
+        }
+        throw e;
+      }
       ui.thinking(false);
       results[idx] = result;
       ui.tool(call.function.name, call.function.arguments, result);
+      if (opts?.signal?.aborted) {
+        return { success: false, summary: "Interrupted by user" };
+      }
       if (count === 1 && !result.startsWith("error:") && PROGRESS_TOOLS.has(call.function.name)) {
         progressed = true;
       }
@@ -260,6 +288,10 @@ export async function run(
     if (parallel) ui.thinking(true, `running ${spawnCount} subagents`);
     await Promise.allSettled(pending); // wait for all subagents; allSettled means one failing can't abandon the rest
     if (parallel) ui.thinking(false);
+
+    if (opts?.signal?.aborted) {
+      return { success: false, summary: "Interrupted by user" };
+    }
 
     // Every tool_call gets its matching result, in call order.
     for (let idx = 0; idx < calls.length; idx++) {
@@ -319,6 +351,10 @@ export async function run(
           ui.warn(`context summarized — compressed ${compaction.description}`);
         }
       } catch (e: any) {
+        ui.thinking(false);
+        if (opts?.signal?.aborted || e.name === "AbortError" || e.message === "The user aborted a request.") {
+          return { success: false, summary: "Interrupted by user" };
+        }
         // Summarization failed — fall through to hard-drop if still over budget
         ui.debug(`summarization failed: ${e.message ?? e}`);
         if (overBudget(messages, budget)) {

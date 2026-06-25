@@ -57,7 +57,7 @@ export function capResult(s: string): string {
 // Run one tool call. Never throws — errors come back as the result so the model can recover. The
 // permissions gate below applies to every run, parent or subagent, so a subagent's full toolset is
 // still fenced by the same deny-list as the top agent.
-export async function dispatch(name: string, argsJson: string): Promise<string> {
+export async function dispatch(name: string, argsJson: string, signal?: AbortSignal): Promise<string> {
   const tool = registry[name];
   if (!tool) return `error: unknown tool '${name}'`;
 
@@ -74,7 +74,7 @@ export async function dispatch(name: string, argsJson: string): Promise<string> 
   if (!decision.allow) return `error: blocked: ${decision.reason}`;
 
   try {
-    return capResult(await tool.run(args));
+    return capResult(await tool.run(args, signal));
   } catch (e: any) {
     return `error: ${e.message}`;
   }
