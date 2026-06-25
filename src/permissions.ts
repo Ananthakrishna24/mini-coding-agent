@@ -22,7 +22,7 @@ const DENY: { pattern: RegExp; reason: string }[] = [
 ];
 
 // Read-only tools can't break anything — gating them only trains the user to rubber-stamp.
-const READ_ONLY = new Set(["read_file"]);
+const READ_ONLY = new Set(["read_file", "web_fetch", "web_search"]);
 
 // deny → allow. (The interactive "ask" tier from real harnesses needs a human at a prompt;
 // this loop runs autonomously, so there's nobody to ask — deferred with the OS sandbox.)

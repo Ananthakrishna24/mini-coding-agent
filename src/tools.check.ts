@@ -127,6 +127,80 @@ assert.equal(await dispatch("grep", JSON.stringify({ pattern: "missing", path: "
 assert.match(await dispatch("grep", JSON.stringify({ pattern: "alpha", output_mode: "bad" })), /output_mode/);
 await fs.rm(".agent-check-search", { recursive: true, force: true });
 
+// web_fetch: fetch URL content, mock the network call to keep it offline.
+const originalFetch = globalThis.fetch;
+try {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    if (url === "https://test.com/html") {
+      return {
+        ok: true,
+        headers: new Map([["content-type", "text/html"]]),
+        text: async () => "<html><head><style>body{color:red}</style></head><body><h1>Hello</h1><p>World!</p></body></html>",
+      } as any;
+    }
+    if (url === "https://test.com/text") {
+      return {
+        ok: true,
+        headers: new Map([["content-type", "text/plain"]]),
+        text: async () => "Raw text",
+      } as any;
+    }
+    return {
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+    } as any;
+  }) as any;
+
+  const htmlRes = await dispatch("web_fetch", JSON.stringify({ url: "https://test.com/html" }));
+  assert.equal(htmlRes, "Hello\n\nWorld!");
+
+  const textRes = await dispatch("web_fetch", JSON.stringify({ url: "https://test.com/text" }));
+  assert.equal(textRes, "Raw text");
+
+  const failRes = await dispatch("web_fetch", JSON.stringify({ url: "https://test.com/404" }));
+  assert.match(failRes, /HTTP error! status: 404/);
+
+  const invalidRes = await dispatch("web_fetch", JSON.stringify({ url: "not-a-url" }));
+  assert.match(invalidRes, /Invalid URL/);
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+// web_search: search the web, mock the network call to keep it offline.
+const originalSearchFetch = globalThis.fetch;
+try {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input.toString();
+    if (url.includes("s.jina.ai")) {
+      const query = decodeURIComponent(url.split("s.jina.ai/")[1] || "");
+      if (query === "test query") {
+        return {
+          ok: true,
+          text: async () => "Search Results: [Result 1](https://r1.com) - Snippet 1",
+        } as any;
+      }
+    }
+    return {
+      ok: false,
+      status: 404,
+      statusText: "Not Found",
+    } as any;
+  }) as any;
+
+  const searchRes = await dispatch("web_search", JSON.stringify({ query: "test query" }));
+  assert.equal(searchRes, "Search Results: [Result 1](https://r1.com) - Snippet 1");
+
+  const failSearch = await dispatch("web_search", JSON.stringify({ query: "bad query" }));
+  assert.match(failSearch, /HTTP error! status: 404/);
+
+  const invalidSearch = await dispatch("web_search", JSON.stringify({ query: "" }));
+  assert.match(invalidSearch, /'query' must be a non-empty string/);
+} finally {
+  globalThis.fetch = originalSearchFetch;
+}
+
 // trust-boundary failures come back as results, never thrown
 assert.match(await dispatch("read_file", JSON.stringify({ path: "../../../etc/passwd" })), /escapes workspace/);
 assert.match(await dispatch("nope", "{}"), /unknown tool/);
