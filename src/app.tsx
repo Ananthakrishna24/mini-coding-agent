@@ -2,7 +2,7 @@
 // lives in <Static> so it commits once and scrolls naturally; the live region below holds the
 // plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Box, Text, Static, useApp, useInput } from "ink";
+import { Box, Text, Static, useApp, useInput, useStdout } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, interrupt, type Item, type Picker, type ResumePicker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail, termWidth, fmtPrice } from "./format";
 import { clipboardImageToTemp } from "./images";
@@ -577,19 +577,35 @@ function Prompt() {
 
 export function App() {
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const [, setWidth] = useState(0);
+  const { stdout } = useStdout();
+  const [resizeGen, setResizeGen] = useState(0);
   useEffect(() => {
-    const handleResize = () => setWidth(process.stdout.columns || 80);
-    process.stdout.on("resize", handleResize);
-    return () => {
-      process.stdout.off("resize", handleResize);
+    // On resize, width-dependent output (── rules, diff columns) drawn at the old width goes stale, and
+    // Ink's frame bookkeeping leaves a ghost of the previous live region. Debounce the SIGWINCH storm of
+    // a drag, then clear the screen and bump resizeGen — that remounts <Static> so the whole tree (scroll-
+    // back + live region) reprints at the new width with no ghosts.
+    let t: ReturnType<typeof setTimeout>;
+    const handleResize = () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        // Clear visible screen AND scrollback (\x1b[3J), cursor home. Scrollback must go too: the Static
+        // remount below reprints every item, so leaving the old copy in scrollback stacks duplicates on
+        // each resize. Wiping it first means the remount leaves exactly one fresh copy at the new width.
+        stdout.write("\x1b[2J\x1b[3J\x1b[H");
+        setResizeGen((n) => n + 1);
+      }, 100);
     };
-  }, []);
+    stdout.on("resize", handleResize);
+    return () => {
+      clearTimeout(t);
+      stdout.off("resize", handleResize);
+    };
+  }, [stdout]);
 
   return (
     <Box flexDirection="column">
-      {/* key=gen: /clear bumps it so Static remounts (its internal counter resets) and reprints fresh */}
-      <Static key={s.gen} items={s.items}>
+      {/* key: /clear bumps s.gen; resize bumps resizeGen — either remounts <Static> so it reprints fresh */}
+      <Static key={`${s.gen}:${resizeGen}`} items={s.items}>
         {(item) => <ItemView key={item.id} item={item} />}
       </Static>
       <Footer />
