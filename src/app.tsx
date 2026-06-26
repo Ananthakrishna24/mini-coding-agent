@@ -3,7 +3,7 @@
 // plan/status footer and the input with its "/" command menu. State comes from store.ts.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput, useStdout } from "ink";
-import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, interrupt, type Item, type Picker, type ResumePicker } from "./store";
+import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, interrupt, refreshBanner, getBannerLines, type Item, type Picker, type ResumePicker } from "./store";
 import { c, describeModel, toolEntry, resultBody, iconize, getPrimaryColor, COLOR_PRESETS, paintHex, subHeader, rail, termWidth, fmtPrice } from "./format";
 import { clipboardImageToTemp } from "./images";
 import { matchFiles } from "./tools/workspace";
@@ -97,6 +97,25 @@ function ShimmerText({ label, f }: { label: string; f: number }) {
           </Text>
         );
       })}
+    </Box>
+  );
+}
+
+function AnimatedWelcomeBanner() {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => {
+      setFrame((n) => (n + 1) % 30);
+    }, 80);
+    return () => clearInterval(t);
+  }, []);
+
+  const lines = getBannerLines(frame);
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {lines.map((l, i) => (
+        <Text key={i}>{`  ${l}`}</Text>
+      ))}
     </Box>
   );
 }
@@ -592,6 +611,7 @@ export function App() {
         // remount below reprints every item, so leaving the old copy in scrollback stacks duplicates on
         // each resize. Wiping it first means the remount leaves exactly one fresh copy at the new width.
         stdout.write("\x1b[2J\x1b[3J\x1b[H");
+        refreshBanner();
         setResizeGen((n) => n + 1);
       }, 100);
     };
@@ -602,12 +622,16 @@ export function App() {
     };
   }, [stdout]);
 
+  const isNewSession = s.items.length === 1 && s.items[0].kind === "info";
+  const staticItems = isNewSession ? [] : s.items;
+
   return (
     <Box flexDirection="column">
       {/* key: /clear bumps s.gen; resize bumps resizeGen — either remounts <Static> so it reprints fresh */}
-      <Static key={`${s.gen}:${resizeGen}`} items={s.items}>
+      <Static key={`${s.gen}:${resizeGen}`} items={staticItems}>
         {(item) => <ItemView key={item.id} item={item} />}
       </Static>
+      {isNewSession && <AnimatedWelcomeBanner />}
       <Footer />
       {/* /setup swaps the prompt for the onboarding overlay; rendering it in place of Prompt means only
           one useInput is active, so the two don't fight over the keyboard. */}

@@ -319,65 +319,106 @@ export function resultBody(summary: string): string[] {
   return renderMarkdown(summary.trim(), md).split("\n");
 }
 
-// The minion mascot, loaded from ascii-art.txt at the project root (edit that file to change it). Kept
-// small by hand — a banner mascot wants a few crisp rows; a detailed photo decimated to this size just
-// turns to noise. A missing/unreadable file falls back to a one-liner so a deleted asset can't crash startup.
-const minionArt = ((): string[] => {
-  try {
-    return readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "ascii-art.txt"), "utf8").replace(/\n+$/, "").split("\n");
-  } catch {
-    return ["(•◡•)"];
-  }
-})();
+const SHIMMER_M = [
+  "  ██      ██  ",
+  "  ████  ████  ",
+  "  ██████████  ",
+  "  ██  ██  ██  ",
+  "██████  ██████"
+];
 
-// An art line may lead with a 1-char colour key + "|" so one mascot is multi-coloured even though each
-// line is painted as a whole (w hat · y body · b overalls · k outline/feet · o clipboard). The body (y)
-// and overalls (b) wear the primary accent so the mascot blends with the chosen color; the rest keep
-// fixed hues (white hat, gray goggles, red clipboard) so it still reads as a minion.
-const ART_COLOR: Record<string, Style> = {
-  w: ["whiteBright", "bold"],
-  k: "gray",
-  o: ["redBright", "bold"],
-};
-function artRow(line: string): { t: string; s: (x: string) => string } {
-  if (line[1] !== "|") return { t: line, s: (x) => paintHex(primaryHex, paint("bold", x)) };
-  const key = line[0];
-  const t = line.slice(2);
-  if (key === "y") return { t, s: (x) => paintHex(primaryHex, paint("bold", x)) };
-  if (key === "b") return { t, s: (x) => paint("dim", paintHex(primaryHex, x)) };
-  const style = ART_COLOR[key] ?? "dim";
-  return { t, s: (x) => paint(style, x) };
+function renderShimmerLine(r: number, rawLine: string, primaryHex: string, glimmerIndex?: number): { t: string; s: (x: string) => string } {
+  const t = rawLine;
+  const s = (x: string) => {
+    let out = "";
+    for (let i = 0; i < x.length; i++) {
+      const char = x[i];
+      if (i >= 14 || char === " ") {
+        out += char;
+        continue;
+      }
+      
+      let isHighlight = false;
+      if (glimmerIndex === undefined) {
+        // Use static highlight
+        isHighlight =
+          (r === 0 && i === 3) ||
+          (r === 1 && (i === 4 || i === 5)) ||
+          (r === 2 && (i === 6 || i === 7)) ||
+          (r === 4 && (i === 10 || i === 11));
+      } else {
+        // Use moving diagonal highlight (slope of 2 columns per row)
+        const sweepPos = i - r * 2;
+        const gIdx = glimmerIndex - 6; // Center the sweep offset
+        isHighlight = sweepPos === gIdx || sweepPos === gIdx - 1;
+      }
+
+      if (isHighlight) {
+        out += paint(["whiteBright", "bold"], char);
+      } else {
+        if (r < 2) {
+          out += paintHex(primaryHex, paint("bold", char));
+        } else if (r === 2) {
+          out += paint("dim", paintHex(primaryHex, char));
+        } else {
+          out += paint(["redBright", "bold"], char);
+        }
+      }
+    }
+    return out;
+  };
+  return { t, s };
 }
 
 // The bordered welcome card as colored rows — shared by the console banner (ui.ts) and the Ink
 // scrollback (the first history item). Box characters, no TUI library; padding is on the plain text.
-export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string): string[] {
-  const titleStr = c.bold(c.primary("MiniCode")) + " " + c.dim(`v${VERSION}`) + " " + c.dim(`· Ananthakrishna's build`);
-  const art = minionArt.map(artRow);
+export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string, glimmerIndex?: number): string[] {
+  const termW = termWidth();
+
+  const art = SHIMMER_M.map((line, r) => renderShimmerLine(r, line, primaryHex, glimmerIndex));
   const artW = Math.max(...art.map((a) => a.t.length));
 
-  // The welcome text, set beside the mascot rather than stacked under it. No emojis.
-  const text: { t: string; s?: (x: string) => string }[] = [
-    { t: `Model      ${info?.id ?? id}`, s: (x) => c.primary(x) },
-    ...(info
-      ? [
-          { t: `Context    ${fmtTokens(info.context)} tokens` },
-          { t: `Price      ${fmtPrice(info.promptPrice)} prompt · ${fmtPrice(info.completionPrice)} completion / 1M` },
-        ]
-      : []),
-    { t: `Folder     ${clip(cwd, 48)}` },
-    { t: "" },
-    { t: `Ready to code! Type your request below.` },
-    { t: `Hotkeys:   Ctrl+O models  ·  Ctrl+K colors  ·  Ctrl+R sessions` },
-  ];
+  // Dynamically adapt the text block and title to the remaining terminal width
+  const maxTextW = Math.max(30, termW - 10 - artW);
 
-  // Pair the columns row-by-row, vertically centering the shorter (text) block against the taller (art).
+  const titleStr = c.bold(c.primary("MiniCode")) + " " + c.dim(`v${VERSION}`);
+
+  const folderClipW = Math.max(15, maxTextW - 12);
+  const folderStr = clip(cwd, folderClipW);
+
+  const text: { t: string; s?: (x: string) => string }[] = [];
+  text.push({ t: `Model      ${clip(info?.id ?? id, Math.max(15, maxTextW - 12))}`, s: (x) => c.primary(x) });
+  if (info) {
+    text.push({ t: `Context    ${fmtTokens(info.context)} tokens` });
+    const priceStr = `${fmtPrice(info.promptPrice)} prompt · ${fmtPrice(info.completionPrice)} completion / 1M`;
+    if (priceStr.length + 11 > maxTextW && maxTextW >= 30) {
+      text.push({ t: `Price      ${fmtPrice(info.promptPrice)} prompt` });
+      text.push({ t: `           ${fmtPrice(info.completionPrice)} completion / 1M` });
+    } else {
+      text.push({ t: `Price      ${priceStr}` });
+    }
+  }
+  text.push({ t: `Folder     ${folderStr}` });
+  text.push({ t: "" });
+  text.push({ t: `Ready to code! Type your request below.` });
+
+  const hotkeysStr = `Hotkeys:   Ctrl+O models  ·  Ctrl+K colors  ·  Ctrl+R sessions`;
+  if (hotkeysStr.length > maxTextW && maxTextW >= 30) {
+    text.push({ t: `Hotkeys:   Ctrl+O models` });
+    text.push({ t: `           Ctrl+K colors` });
+    text.push({ t: `           Ctrl+R sessions` });
+  } else {
+    text.push({ t: hotkeysStr });
+  }
+
+  // Pair the columns side-by-side, vertically centering the shorter block against the taller block.
   const height = Math.max(art.length, text.length);
-  const top = Math.floor((height - text.length) / 2);
+  const artTop = Math.max(0, Math.floor((height - art.length) / 2));
+  const textTop = Math.max(0, Math.floor((height - text.length) / 2));
   const body = Array.from({ length: height }, (_, i) => {
-    const a = art[i];
+    const a = art[i - artTop];
     const left = a ? a.s(a.t.padEnd(artW)) : " ".repeat(artW);
-    const r = text[i - top];
+    const r = text[i - textTop];
     const right = r ? (r.s ? r.s(r.t) : c.dim(r.t)) : "";
     return `${left}    ${right}`;
   });
@@ -389,7 +430,7 @@ export function bannerLines(info: ModelInfo | undefined, id: string, cwd: string
   // Measure *visible* width so ANSI colour codes don't throw the right border off. -6 accounts for
   // the 2-space indent in the Ink UI + the "│ " / " │" borders on each side.
   const contentW = Math.max(...lines.map(visibleLen));
-  const w = Math.max(contentW, termWidth() - 6);
+  const w = Math.max(contentW, termW - 6);
   const pad = (s: string) => s + " ".repeat(w - visibleLen(s));
 
   // Top border with the title embedded top-left: ╭─ MiniCode ──…──╮. The title wears the primary

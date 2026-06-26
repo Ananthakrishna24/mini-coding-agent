@@ -200,6 +200,10 @@ const bannerItem = (): NewItem => ({
   lines: bannerLines(currentInfo, getModel(), process.cwd().replace(homedir(), "~")),
 });
 
+export function getBannerLines(glimmerIndex?: number): string[] {
+  return bannerLines(currentInfo, getModel(), process.cwd().replace(homedir(), "~"), glimmerIndex);
+}
+
 export async function init() {
   await setModel(getModel()).catch(() => undefined); // load the real context window from the catalog up front
   await syncModel();
@@ -229,7 +233,7 @@ function freshSession() {
 
 // Refresh the banner after a color or model change: replace items[0] with a fresh banner, clear the
 // screen, and bump gen so <Static> remounts and reprints. Past items re-render in the new color too.
-function refreshBanner() {
+export function refreshBanner() {
   if (process.stdout.isTTY) process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
   const items = [...state.items];
   if (items.length) items[0] = { id: items[0].id, ...bannerItem() } as Item;
