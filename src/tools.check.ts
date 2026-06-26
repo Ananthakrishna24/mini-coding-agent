@@ -231,6 +231,19 @@ assert.equal(
   "[x] Add config option\n[~] Wire through loader\n[ ] Update docs",
   "renders status marks in order",
 );
+assert.equal(
+  await dispatch("update_plan", JSON.stringify({
+    explanation: "tests revealed the loader runs first",
+    plan: [{ step: "Reorder init", status: "in_progress" }],
+  })),
+  "tests revealed the loader runs first\n\n[~] Reorder init",
+  "prepends explanation when given",
+);
+assert.match(
+  await dispatch("update_plan", JSON.stringify({ explanation: 7, plan: [{ step: "a", status: "pending" }] })),
+  /'explanation' must be a string/,
+  "non-string explanation rejected",
+);
 assert.match(await dispatch("update_plan", JSON.stringify({ plan: [] })), /non-empty array/, "empty plan rejected");
 assert.match(
   await dispatch("update_plan", JSON.stringify({ plan: [{ step: "x", status: "done" }] })),

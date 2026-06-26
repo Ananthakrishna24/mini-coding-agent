@@ -6,7 +6,9 @@
 //
 // It's a real dispatch tool, not a terminal signal like final_answer: it runs, validates, and
 // returns. Its only effect is on the *conversation*, not the world. The model sends the whole list
-// every call (replace, not diff) — simpler contract, less for the model to get wrong.
+// every call (replace, not diff) — simpler contract, less for the model to get wrong. An optional
+// one-line `explanation` rides along to record *why* a revision happened (what was learned, why the
+// shape changed); it's prepended to the rendered plan so the rationale re-enters context too.
 import type { Tool } from "./types";
 
 const STATUSES = ["pending", "in_progress", "completed"] as const;
@@ -27,12 +29,18 @@ export const update_plan: Tool = {
     function: {
       name: "update_plan",
       description:
-        "Track a multi-step task as a todo list. Call this first to lay out the steps, then call it " +
-        "again to update statuses as you finish each one. Send the whole list every time. Keep exactly " +
-        "one step 'in_progress'. Skip this for a one-step task.",
+        "Track a genuinely multi-step task as a todo list. Call this first to lay out the steps, then " +
+        "call it again to update statuses as you finish each one. Send the whole list every time. Keep " +
+        "exactly one step 'in_progress', and set a step 'in_progress' before marking it 'completed'. " +
+        "Each step names concrete, verifiable work — no filler or obvious steps. Skip this for trivial " +
+        "or single-step work. Optionally pass a one-line 'explanation' for why a revision happened.",
       parameters: {
         type: "object",
         properties: {
+          explanation: {
+            type: "string",
+            description: "Optional one-line note on why the plan changed — what you learned or why the shape shifted.",
+          },
           plan: {
             type: "array",
             description: "The full ordered list of steps. Replaces the previous list.",
@@ -54,9 +62,12 @@ export const update_plan: Tool = {
   },
   // Validate at the boundary like every tool. Throws on bad input; dispatch turns the throw into an
   // `error: …` result the model can correct (Task 4.1) — never a crash.
-  async run({ plan }) {
+  async run({ plan, explanation }) {
     if (!Array.isArray(plan) || plan.length === 0) {
       throw new Error("update_plan: 'plan' must be a non-empty array of steps");
+    }
+    if (explanation != null && typeof explanation !== "string") {
+      throw new Error("update_plan: 'explanation' must be a string when provided");
     }
     const steps: Step[] = plan.map((s: any, i) => {
       if (!s || typeof s.step !== "string" || s.step.trim() === "") {
@@ -75,6 +86,9 @@ export const update_plan: Tool = {
       throw new Error(`update_plan: only one step may be 'in_progress' at a time (got ${inProgress})`);
     }
 
-    return renderPlan(steps);
+    // Bare checklist when there's no note, so the common path stays clean; prepend the one-liner
+    // when given so the rationale rides back into context alongside the plan.
+    const note = typeof explanation === "string" ? explanation.trim() : "";
+    return note ? `${note}\n\n${renderPlan(steps)}` : renderPlan(steps);
   },
 };
