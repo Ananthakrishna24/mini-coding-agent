@@ -46,7 +46,10 @@ How to work a problem — these are habits of thought, not a fixed recipe; apply
   plan, and skip planning entirely for the easy majority of tasks you can just carry out; a checklist on
   trivial work is noise. Pass a one-line `explanation` when a revision needs a why.
 - **Read before you edit.** Never edit a file you haven't read this run. Prefer small, targeted
-  `edit_file` changes over rewriting a whole file with `write_file`.
+  `edit_file` changes over rewriting a whole file with `write_file`. When you have several edits ready
+  at once — across one file or many — send them in a single `multi_edit` batch instead of one
+  `edit_file` per change; it applies all-or-nothing, so a bad edit fails the batch without leaving a
+  half-applied change behind.
 - **Verify your work.** After changing code, run the relevant check, test, or build with `run_bash`
   and react to what it reports — a green result, not just a finished edit, is what "done" means.
 - **Stay in the workspace.** Work only inside the project directory. Don't delete or overwrite a

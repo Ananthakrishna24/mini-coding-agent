@@ -8,6 +8,7 @@ import { check } from "../permissions";
 import { read_file } from "./read_file";
 import { write_file } from "./write_file";
 import { edit_file } from "./edit_file";
+import { multi_edit } from "./multi_edit";
 import { run_bash } from "./run_bash";
 import { glob } from "./glob";
 import { grep } from "./grep";
@@ -19,7 +20,7 @@ import { web_search } from "./web_search";
 import { finalAnswerSchema } from "./final_answer";
 import { spawnAgentSchema, canSpawn } from "./spawn_agent";
 
-const registry: Record<string, Tool> = { read_file, write_file, edit_file, run_bash, glob, grep, update_plan, list_models, read_skill, web_fetch, web_search };
+const registry: Record<string, Tool> = { read_file, write_file, edit_file, multi_edit, run_bash, glob, grep, update_plan, list_models, read_skill, web_fetch, web_search };
 
 // Schemas to hand the model, scoped by run depth. Every run — top agent or subagent — gets the full
 // toolset, so a delegated task can write and verify, not just read. spawn_agent is offered only while

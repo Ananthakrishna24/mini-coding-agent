@@ -70,6 +70,51 @@ await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "find_me", ne
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "$& and $1");
 await fs.rm(ef);
 
+// multi_edit: a batch of exact-text edits applied all-or-nothing across one or more files.
+const m1 = ".agent-check-multi1.tmp";
+const m2 = ".agent-check-multi2.tmp";
+await dispatch("write_file", JSON.stringify({ path: m1, content: "alpha\nbeta\ngamma" }));
+await dispatch("write_file", JSON.stringify({ path: m2, content: "one two two" }));
+// like edit_file, every target must be read first
+assert.match(
+  await dispatch("multi_edit", JSON.stringify({ edits: [{ path: m1, old_string: "alpha", new_string: "ALPHA" }] })),
+  /has not been read completely/,
+);
+await dispatch("read_file", JSON.stringify({ path: m1 }));
+await dispatch("read_file", JSON.stringify({ path: m2 }));
+// one batch spanning two files, including a replace_all and a sequential same-file edit that depends
+// on the earlier one's result
+const ok = await dispatch("multi_edit", JSON.stringify({ edits: [
+  { path: m1, old_string: "alpha", new_string: "ALPHA" },
+  { path: m1, old_string: "ALPHA\nbeta", new_string: "ALPHA\nBETA" }, // sees the prior edit's output
+  { path: m2, old_string: "two", new_string: "2", replace_all: true },
+] }));
+assert.match(ok, /edited 2 files/);
+assert.match(ok, /\.agent-check-multi1\.tmp \(2 replacements\)/);
+assert.match(ok, /\.agent-check-multi2\.tmp \(2 replacements\)/);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: m1 })), "ALPHA\nBETA\ngamma");
+assert.equal(await dispatch("read_file", JSON.stringify({ path: m2 })), "one 2 2");
+// transactional: a later failing edit rolls back the whole batch — the earlier valid edit is NOT written
+await dispatch("read_file", JSON.stringify({ path: m1 }));
+assert.match(
+  await dispatch("multi_edit", JSON.stringify({ edits: [
+    { path: m1, old_string: "ALPHA", new_string: "first" },
+    { path: m1, old_string: "nope", new_string: "x" }, // fails -> nothing written
+  ] })),
+  /edit 2 .*not found/,
+);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: m1 })), "ALPHA\nBETA\ngamma", "failed batch left the file untouched");
+// ambiguity is reported with the offending edit's index, as a result not a throw
+await dispatch("read_file", JSON.stringify({ path: m2 }));
+assert.match(
+  await dispatch("multi_edit", JSON.stringify({ edits: [{ path: m2, old_string: "2", new_string: "x" }] })),
+  /edit 1 .*matches 2 places/,
+);
+// empty batch rejected
+assert.match(await dispatch("multi_edit", JSON.stringify({ edits: [] })), /non-empty array/);
+await fs.rm(m1);
+await fs.rm(m2);
+
 // read size guard: a file over the limit is refused (not OOM'd), as a result pointing at run_bash
 const bigf = ".agent-check-big.tmp";
 await fs.writeFile(bigf, "x".repeat(5 * 1024 * 1024 + 1));

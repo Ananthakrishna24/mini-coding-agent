@@ -23,7 +23,7 @@ const REPEAT_LIMIT = 3;
 
 // "Progress" = a new, non-erroring call to a tool that reads or changes the world. Re-running a call
 // or only re-planning doesn't count, so a model that just spins its wheels still trips STALL_LIMIT.
-const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "run_bash"]);
+const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "multi_edit", "run_bash"]);
 
 // Standing orders live in prompts/system.md — editable without touching code, read once at startup.
 // Fixed block first, environment last: an identical prefix is what lets the provider cache it across
