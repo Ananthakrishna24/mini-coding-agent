@@ -4,3 +4,4 @@ node_modules/
 .commandcode/taste/taste.md
 dist/
 INTERNAL/
+test_project/
