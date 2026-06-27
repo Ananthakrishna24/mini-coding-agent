@@ -35,12 +35,10 @@ assert.match(await dispatch("read_file", JSON.stringify({ path: lf, offset: 0 })
 assert.match(await dispatch("read_file", JSON.stringify({ path: lf, limit: -1 })), /'limit' must be a positive integer/);
 await fs.rm(lf);
 
-// edit_file: surgical replace of a unique block, then read it back. Existing files must be read
-// first, matching the reference harness's stale-overwrite protection.
+// edit_file: surgical replace of a unique block, then read it back. Exact edits validate against
+// the current file contents, so they do not need a prior whole-file read.
 const ef = ".agent-check-edit.tmp";
 await dispatch("write_file", JSON.stringify({ path: ef, content: "alpha\nbeta\ngamma" }));
-assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /has not been read completely/);
-await dispatch("read_file", JSON.stringify({ path: ef }));
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /1 replacement/);
 assert.match(await dispatch("write_file", JSON.stringify({ path: ef, content: "stale overwrite" })), /has not been read completely/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "alpha\nBETA\ngamma");
@@ -53,20 +51,20 @@ assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: 
 // replace_all hits every occurrence
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "x", new_string: "y", replace_all: true })), /3 replacements/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "y y y");
-// partial reads do not authorize overwriting or editing the whole existing file
+// partial reads do not authorize overwriting, but exact edits are checked against the live file.
 await dispatch("write_file", JSON.stringify({ path: ef, content: "one\ntwo\nthree" }));
 await dispatch("read_file", JSON.stringify({ path: ef, offset: 2, limit: 1 }));
 assert.match(await dispatch("write_file", JSON.stringify({ path: ef, content: "replace" })), /has not been read completely/);
-assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "two", new_string: "TWO" })), /has not been read completely/);
-// external changes after a read force a re-read before modification
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "two", new_string: "TWO" })), /1 replacement/);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "one\nTWO\nthree");
+// external changes after a read are edited based on current exact content.
 await dispatch("read_file", JSON.stringify({ path: ef }));
 await new Promise((resolve) => setTimeout(resolve, 5));
 await fs.writeFile(ef, "changed outside tool");
-assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "changed", new_string: "CHANGED" })), /changed since it was read/);
+assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "changed", new_string: "CHANGED" })), /1 replacement/);
+assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "CHANGED outside tool");
 // new_string with a $ pattern is inserted literally, not treated as a backreference
-await dispatch("read_file", JSON.stringify({ path: ef }));
 await dispatch("write_file", JSON.stringify({ path: ef, content: "find_me" }));
-await dispatch("read_file", JSON.stringify({ path: ef }));
 await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "find_me", new_string: "$& and $1" }));
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "$& and $1");
 await fs.rm(ef);
@@ -76,13 +74,6 @@ const m1 = ".agent-check-multi1.tmp";
 const m2 = ".agent-check-multi2.tmp";
 await dispatch("write_file", JSON.stringify({ path: m1, content: "alpha\nbeta\ngamma" }));
 await dispatch("write_file", JSON.stringify({ path: m2, content: "one two two" }));
-// like edit_file, every target must be read first
-assert.match(
-  await dispatch("multi_edit", JSON.stringify({ edits: [{ path: m1, old_string: "alpha", new_string: "ALPHA" }] })),
-  /has not been read completely/,
-);
-await dispatch("read_file", JSON.stringify({ path: m1 }));
-await dispatch("read_file", JSON.stringify({ path: m2 }));
 // one batch spanning two files, including a replace_all and a sequential same-file edit that depends
 // on the earlier one's result
 const ok = await dispatch("multi_edit", JSON.stringify({ edits: [
@@ -120,7 +111,7 @@ await fs.rm(m2);
 const bigf = ".agent-check-big.tmp";
 await fs.writeFile(bigf, "x".repeat(5 * 1024 * 1024 + 1));
 assert.match(await dispatch("read_file", JSON.stringify({ path: bigf })), /over the 5MB read limit/);
-assert.match(await dispatch("edit_file", JSON.stringify({ path: bigf, old_string: "x", new_string: "y" })), /has not been read completely/);
+assert.match(await dispatch("edit_file", JSON.stringify({ path: bigf, old_string: "x", new_string: "y" })), /over the 5MB read limit/);
 await fs.rm(bigf);
 
 // binary guard: a file with NUL bytes is refused as text (points at run_bash), so decoded garbage

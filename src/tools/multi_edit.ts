@@ -4,7 +4,7 @@ import type { Tool } from "./types";
 import { resolveInWorkspace, WORKSPACE } from "./workspace";
 import { writeAtomic } from "./atomic";
 import { readTextFile } from "./read-text";
-import { forgetFileRead, requireFreshWholeFileRead } from "./file-state";
+import { forgetFileRead } from "./file-state";
 import { withPathLocks } from "./path-locks";
 
 type EditArg = { path: string; old_string: string; new_string: string; replace_all?: boolean };
@@ -20,7 +20,8 @@ export const multi_edit: Tool = {
         "'old_string' must match exactly (including whitespace) and be unique unless 'replace_all' is " +
         "true. Edits apply in order, so a later edit sees an earlier one's result on the same file. If " +
         "any edit fails to apply, none are written — fix it and resend the batch. Prefer this over " +
-        "multiple edit_file calls when changing several places at once. Read each file first.",
+        "multiple edit_file calls when changing several places at once. Checks current files at " +
+        "execution time; no prior whole-file read is required.",
       parameters: {
         type: "object",
         properties: {
@@ -79,7 +80,6 @@ export const multi_edit: Tool = {
 
         const abs = e.abs;
         if (!working.has(abs)) {
-          await requireFreshWholeFileRead(abs, "multi_edit"); // Ensure file is fresh
           working.set(abs, await readTextFile(abs));
           display.set(abs, e.path);
           counts.set(abs, 0);

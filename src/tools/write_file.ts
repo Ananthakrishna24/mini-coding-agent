@@ -11,7 +11,9 @@ export const write_file: Tool = {
     type: "function",
     function: {
       name: "write_file",
-      description: "Create or overwrite a UTF-8 text file within the workspace.",
+      description:
+        "Create or overwrite a UTF-8 text file within the workspace. Overwriting an existing file " +
+        "requires a prior whole-file read; prefer edit_file or multi_edit for targeted changes.",
       parameters: {
         type: "object",
         properties: {

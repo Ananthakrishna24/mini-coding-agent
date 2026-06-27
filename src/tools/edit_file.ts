@@ -3,7 +3,7 @@ import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
 import { writeAtomic } from "./atomic";
 import { readTextFile } from "./read-text";
-import { forgetFileRead, requireFreshWholeFileRead } from "./file-state";
+import { forgetFileRead } from "./file-state";
 import { withPathLock } from "./path-locks";
 
 export const edit_file: Tool = {
@@ -14,7 +14,8 @@ export const edit_file: Tool = {
       description:
         "Replace an exact block of text in a workspace file. 'old_string' must match the file " +
         "exactly (including whitespace) and be unique unless 'replace_all' is true. Prefer this over " +
-        "write_file for changing part of a file — include enough surrounding context to be unambiguous.",
+        "write_file for changing part of a file — include enough surrounding context to be " +
+        "unambiguous. Checks the current file at execution time; no prior whole-file read is required.",
       parameters: {
         type: "object",
         properties: {
@@ -38,7 +39,6 @@ export const edit_file: Tool = {
 
     const abs = resolveInWorkspace(p);
     return await withPathLock(abs, async () => {
-      await requireFreshWholeFileRead(abs, "edit_file");
       const text = await readTextFile(abs);
 
       const matches = text.split(old_string).length - 1; // Literal match count

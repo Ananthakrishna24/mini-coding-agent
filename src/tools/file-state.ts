@@ -1,4 +1,5 @@
-// Tracks file read states to ensure changes are based on fresh file content.
+// Tracks whole-file reads for existing-file overwrites. Exact edit tools validate against live
+// file contents at execution time instead of using this read gate.
 import fs from "node:fs/promises";
 
 export type FileReadState = {
@@ -24,6 +25,6 @@ export async function requireFreshWholeFileRead(abs: string, toolName: string): 
 
   const stat = await fs.stat(abs);
   if (stat.mtimeMs > state.mtimeMs) {
-    throw new Error(`${toolName}: file has changed since it was read — read it again before modifying it`);
+    throw new Error(`${toolName}: file has changed since it was read — read it again before overwriting it`);
   }
 }
