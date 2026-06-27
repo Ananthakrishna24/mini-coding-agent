@@ -85,7 +85,11 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
       if (k.return) {
         const chosen = model.trim() || PROVIDERS[provider].defaultModel;
         try {
-          writeEnv({ [PROVIDERS[provider].keyVar]: key.trim(), AGENT_MODEL: chosen });
+          writeEnv({
+            [PROVIDERS[provider].keyVar]: key.trim(),
+            AGENT_MODEL: chosen,
+            PROVIDER: provider,
+          });
         } catch (e: any) {
           setError(`could not write .env: ${e.message ?? e}`);
           return;
@@ -187,7 +191,42 @@ function loadEnv(envPath: string): void {
   }
 }
 
+// Automatically add PROVIDER key if it's missing but its API key is configured.
+// This repairs old .env files created before the fix.
+export function migrateEnvFile(envPath: string): void {
+  if (!fs.existsSync(envPath)) return;
+  try {
+    const content = fs.readFileSync(envPath, "utf8");
+    const keys: Record<string, string> = {};
+    for (const line of content.split("\n")) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/);
+      if (m) keys[m[1]] = m[2].trim();
+    }
+
+    if (keys.PROVIDER) return;
+
+    const presentProviders = (Object.keys(PROVIDERS) as Provider[]).filter(
+      (p) => keys[PROVIDERS[p].keyVar] && keys[PROVIDERS[p].keyVar].length > 0
+    );
+
+    if (presentProviders.length === 1) {
+      const p = presentProviders[0];
+      const updated = mergeEnv(content, { PROVIDER: p });
+      fs.writeFileSync(envPath, updated, { mode: 0o600 });
+      try {
+        fs.chmodSync(envPath, 0o600);
+      } catch {}
+    }
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error(`[debug] env file migration failed for ${envPath}:`, e);
+    }
+  }
+}
+
 export function applyEnvFile(): void {
+  migrateEnvFile(GLOBAL_ENV);
+  migrateEnvFile(LOCAL_ENV);
   loadEnv(GLOBAL_ENV);
   loadEnv(LOCAL_ENV);
 }

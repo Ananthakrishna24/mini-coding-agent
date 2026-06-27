@@ -1,6 +1,9 @@
 // Offline self-check for provider resolution + .env merge — no model/network. Run: npm run check
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, openaiVision, mistralVision } from "./provider";
+import { migrateEnvFile } from "./onboarding";
 
 // --- resolveProvider ---
 
@@ -143,6 +146,32 @@ for (const id of ["pixtral-large-latest", "pixtral-12b-2409"]) {
 }
 for (const id of ["mistral-large-latest", "mistral-small-latest", "codestral-latest"]) {
   assert.ok(!mistralVision(id), `${id} is text-only`);
+}
+// --- migrateEnvFile ---
+{
+  const tmpFile = path.resolve(process.cwd(), ".env.test-migration");
+
+  // Case 1: single key, no PROVIDER -> adds PROVIDER
+  fs.writeFileSync(tmpFile, "OPENROUTER_API_KEY=sk-or-123\nAGENT_MODEL=some-model\n");
+  migrateEnvFile(tmpFile);
+  const content1 = fs.readFileSync(tmpFile, "utf8");
+  assert.match(content1, /PROVIDER=openrouter/, "should migrate and add PROVIDER=openrouter");
+
+  // Case 2: PROVIDER already present -> no change
+  fs.writeFileSync(tmpFile, "OPENROUTER_API_KEY=sk-or-123\nPROVIDER=openai\n");
+  migrateEnvFile(tmpFile);
+  const content2 = fs.readFileSync(tmpFile, "utf8");
+  assert.match(content2, /PROVIDER=openai/, "should preserve existing PROVIDER");
+  assert.ok(!/PROVIDER=openrouter/.test(content2), "should not overwrite existing PROVIDER");
+
+  // Case 3: multiple keys, no PROVIDER -> no change
+  fs.writeFileSync(tmpFile, "OPENROUTER_API_KEY=sk-or-123\nOPENAI_API_KEY=sk-oa-123\n");
+  migrateEnvFile(tmpFile);
+  const content3 = fs.readFileSync(tmpFile, "utf8");
+  assert.ok(!/PROVIDER=/.test(content3), "should not guess PROVIDER when multiple keys exist");
+
+  // Cleanup
+  if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
 }
 
 console.log("provider.check.ts ok");

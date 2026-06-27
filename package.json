@@ -1,6 +1,6 @@
 {
   "name": "myminicode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": false,
   "type": "module",
   "description": "A minimal terminal coding agent powered by an LLM.",
