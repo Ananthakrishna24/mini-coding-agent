@@ -1,6 +1,4 @@
-// The interactive Ink UI: a chat interface. Scrollback (banner, your lines, tool calls, results)
-// lives in <Static> so it commits once and scrolls naturally; the live region below holds the
-// plan/status footer and the input with its "/" command menu. State comes from store.ts.
+// Interactive terminal UI using Ink.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Box, Text, Static, useApp, useInput, useStdout } from "ink";
 import { store, submit, COMMANDS, closePicker, pickerMove, pickerFilter, pickerSelect, closeResumePicker, resumePickerMove, resumePickerSelect, policyPickerMove, policyPickerSelect, policyPickerCancel, POLICY_OPTIONS, closeColorPicker, colorPickerMove, colorPickerSelect, closeEffortPicker, effortPickerMove, effortPickerSelect, finishSetup, EFFORT_LEVELS, openModelPicker, openColorPicker, openResumePicker, openSetup, interrupt, refreshBanner, getBannerLines, type Item, type Picker, type ResumePicker } from "./store";
@@ -11,10 +9,10 @@ import { Onboarding } from "./onboarding";
 
 const indent = (s: string) => `  ${s}`;
 
-const FILE_MENU = 8; // rows shown in the @-file picker
+const FILE_MENU = 8; // rows in the @-file picker
 
 function ItemView({ item }: { item: Item }) {
-  const r = rail(item.depth ?? 0); // left gutter that nests a subagent's items one level in
+  const r = rail(item.depth ?? 0); // gutter for nesting subagents
   const ind = (s: string) => `  ${r}${s}`;
   switch (item.kind) {
     case "user":
@@ -33,7 +31,7 @@ function ItemView({ item }: { item: Item }) {
           ))}
         </Box>
       );
-    case "subagent": // delegation header: the AGENT badge + the subagent's goal, opening the nested block
+    case "subagent":
       return (
         <Box marginTop={1}>
           <Text>{ind(subHeader(item.goal))}</Text>
@@ -175,7 +173,7 @@ function Spinner({ label }: { label: string }) {
   );
 }
 
-// Live status under the scrollback: the plan checklist in a styled cyan card.
+// Footer view.
 function Footer() {
   const s = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const planRows = s.plan.slice(0, 8);
@@ -197,7 +195,7 @@ function Footer() {
   );
 }
 
-// The /model picker: a filterable, arrow-key list of models inside a styled card.
+// Model picker view.
 const VIEW = 8;
 function PickerView({ picker }: { picker: Picker }) {
   const { items, sel, query, loading } = picker;
@@ -234,7 +232,7 @@ function PickerView({ picker }: { picker: Picker }) {
   );
 }
 
-// The /resume picker: a scrolling list of past chat sessions inside a styled card.
+// Session resume picker view.
 function ResumePickerView({ picker }: { picker: ResumePicker }) {
   const { items, sel } = picker;
   const start = Math.max(0, Math.min(sel - Math.floor(VIEW / 2), Math.max(0, items.length - VIEW)));
@@ -270,7 +268,7 @@ function ResumePickerView({ picker }: { picker: ResumePicker }) {
   );
 }
 
-// The /colors picker: each preset swatched in its own color, inside a styled card.
+// Accent color preset picker view.
 function ColorPickerView({ sel }: { sel: number }) {
   const cur = getPrimaryColor();
   return (
@@ -299,7 +297,7 @@ function ColorPickerView({ sel }: { sel: number }) {
   );
 }
 
-// The model-policy overlay, shown once on the first delegation, inside a styled card.
+// Subagent model delegation policy picker view.
 function PolicyPickerView({ sel }: { sel: number }) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} marginTop={1} width="100%">
@@ -325,7 +323,7 @@ function PolicyPickerView({ sel }: { sel: number }) {
   );
 }
 
-// The reasoning-effort picker, shown right after a reasoning model is chosen, inside a styled card.
+// Reasoning effort level picker view.
 function EffortPickerView({ sel }: { sel: number }) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginTop={1} width="100%">
@@ -358,18 +356,17 @@ function Prompt() {
   const [sel, setSel] = useState(0);
   const [fileSel, setFileSel] = useState(0);
 
-  // "/" menu: filter commands by the first token while it has no space yet.
+  // Autocomplete command filtering.
   const firstTok = buf.split(/\s+/)[0];
   const menu = buf.startsWith("/") && !buf.includes(" ") ? COMMANDS.filter((cmd) => cmd.name.startsWith(firstTok)) : [];
 
-  // "@" file picker: trigger on a trailing @token (start of line or after a space). The capture is the
-  // query typed after @. Empty list (no @ / no matches) = picker closed.
+  // File autocomplete match.
   const atMatch = !busy ? buf.match(/(?:^|\s)@([^\s@]*)$/) : null;
   const fileMenu = atMatch ? matchFiles(atMatch[1]) : [];
   const fileIdx = Math.min(fileSel, Math.max(0, fileMenu.length - 1));
 
   useInput((input, key) => {
-    // Picker mode owns the keyboard: type to filter, arrows to move, enter to pick, esc to cancel.
+    // Picker keys.
     if (s.picker) {
       if (key.escape) return closePicker();
       if (key.return) return void pickerSelect();
@@ -379,7 +376,7 @@ function Prompt() {
       if (input && !key.ctrl && !key.meta) return void pickerFilter(s.picker.query + input);
       return;
     }
-    // Resume picker: arrows to move, enter to reopen the chosen session, esc to cancel.
+    // Resume picker keys.
     if (s.resumePicker) {
       if (key.escape) return closeResumePicker();
       if (key.return) return void resumePickerSelect();
@@ -387,7 +384,7 @@ function Prompt() {
       if (key.downArrow) return resumePickerMove(1);
       return;
     }
-    // Model-policy overlay: the run is paused waiting on this; enter sets it, esc defaults to parent.
+    // Model-policy overlay keys.
     if (s.policyPicker) {
       if (key.escape) return policyPickerCancel();
       if (key.return) return policyPickerSelect();
@@ -395,7 +392,7 @@ function Prompt() {
       if (key.downArrow) return policyPickerMove(1);
       return;
     }
-    // Color picker: arrows to move, enter to apply, esc to cancel (no typing — presets are few).
+    // Color picker keys.
     if (s.colorPicker) {
       if (key.escape) return closeColorPicker();
       if (key.return) return void colorPickerSelect();
@@ -403,7 +400,7 @@ function Prompt() {
       if (key.downArrow) return colorPickerMove(1);
       return;
     }
-    // Effort picker: arrows to move, enter to apply, esc to keep the default (no typing — few levels).
+    // Effort picker keys.
     if (s.effortPicker) {
       if (key.escape) return closeEffortPicker();
       if (key.return) return void effortPickerSelect();
@@ -415,7 +412,7 @@ function Prompt() {
       if (key.escape) {
         interrupt();
       }
-      return; // one run at a time — ignore typing while the agent works
+      return; // Ignore typing while running.
     }
     if (input === "?" && !buf) {
       setBuf("");
@@ -461,9 +458,7 @@ function Prompt() {
         return;
       }
     }
-    // "@" file picker owns Enter/Tab/arrows while open: ⏎ or Tab inserts the highlighted path in place
-    // of the @token, arrows move. Typing/backspace fall through to edit the query (and reposition the
-    // menu). It closes on its own when the trailing @token breaks (space) or stops matching.
+    // Handle file autocomplete selection.
     if (fileMenu.length && atMatch) {
       if (key.return || key.tab) {
         const chosen = fileMenu[fileIdx];
@@ -475,8 +470,7 @@ function Prompt() {
       if (key.downArrow) return setFileSel((n) => (n + 1) % fileMenu.length);
     }
     if (key.return) {
-      // With the "/" menu open, Enter runs the highlighted command (so "/mo"+⏎ → /model), not the
-      // half-typed text. Otherwise submit what's typed.
+      // Run selected command or submit buffer.
       const line = menu.length ? menu[Math.min(sel, menu.length - 1)].name : buf;
       setBuf("");
       setSel(0);
@@ -599,17 +593,12 @@ export function App() {
   const { stdout } = useStdout();
   const [resizeGen, setResizeGen] = useState(0);
   useEffect(() => {
-    // On resize, width-dependent output (── rules, diff columns) drawn at the old width goes stale, and
-    // Ink's frame bookkeeping leaves a ghost of the previous live region. Debounce the SIGWINCH storm of
-    // a drag, then clear the screen and bump resizeGen — that remounts <Static> so the whole tree (scroll-
-    // back + live region) reprints at the new width with no ghosts.
+    // Handle terminal resize events.
     let t: ReturnType<typeof setTimeout>;
     const handleResize = () => {
       clearTimeout(t);
       t = setTimeout(() => {
-        // Clear visible screen AND scrollback (\x1b[3J), cursor home. Scrollback must go too: the Static
-        // remount below reprints every item, so leaving the old copy in scrollback stacks duplicates on
-        // each resize. Wiping it first means the remount leaves exactly one fresh copy at the new width.
+        // Clear screen and scrollback, then trigger reprint.
         stdout.write("\x1b[2J\x1b[3J\x1b[H");
         refreshBanner();
         setResizeGen((n) => n + 1);
@@ -627,14 +616,13 @@ export function App() {
 
   return (
     <Box flexDirection="column">
-      {/* key: /clear bumps s.gen; resize bumps resizeGen — either remounts <Static> so it reprints fresh */}
+      {/* Remount Static on clear or resize to reprint fresh. */}
       <Static key={`${s.gen}:${resizeGen}`} items={staticItems}>
         {(item) => <ItemView key={item.id} item={item} />}
       </Static>
       {isNewSession && <AnimatedWelcomeBanner />}
       <Footer />
-      {/* /setup swaps the prompt for the onboarding overlay; rendering it in place of Prompt means only
-          one useInput is active, so the two don't fight over the keyboard. */}
+      {/* Onboarding overlay takes precedence over prompt input. */}
       {s.setup ? <Onboarding inApp onExit={finishSetup} /> : <Prompt />}
     </Box>
   );

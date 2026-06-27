@@ -1,17 +1,15 @@
-// Shared trust boundary for every file tool: confine paths to the working directory.
-// The model's paths are untrusted input, so this runs before any fs call.
+// Workspace path validation and file indexing helper utilities.
 import path from "node:path";
-import fs from "node:fs";
+import fs from "fs";
 
 export const WORKSPACE = process.cwd();
 
-// Heavy/noise dirs the @-file picker never walks into. Hardcoded skip list — add a dir here if needed.
+// Directories to skip during workspace indexing.
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".cache", "coverage"]);
 
 let fileCache: string[] | null = null;
 
-// Workspace-relative file paths for the @-mention picker, walked once and cached for the session.
-// Skips SKIP_DIRS and dotfiles; capped so a giant tree can't stall the UI.
+// Lists all files in the workspace up to a limit, cached.
 export function listWorkspaceFiles(limit = 5000): string[] {
   if (fileCache) return fileCache;
   const out: string[] = [];
@@ -38,9 +36,7 @@ export function listWorkspaceFiles(limit = 5000): string[] {
   return out;
 }
 
-// Rank file paths for the @-mention picker (pure, so it's testable without touching the fs). Empty
-// query → natural order, capped. Otherwise case-insensitive: basename-startswith beats path-startswith
-// beats substring-anywhere; non-matches drop. Stable sort keeps walk order within a tier.
+// Ranks workspace files based on closeness of match to a search query.
 export function rankFiles(files: string[], query: string, limit = 50): string[] {
   if (!query) return files.slice(0, limit);
   const q = query.toLowerCase();
@@ -66,7 +62,7 @@ export function resolveInWorkspace(p: string): string {
   if (abs !== WORKSPACE && !abs.startsWith(WORKSPACE + path.sep)) {
     throw new Error(`path escapes workspace: ${p}`);
   }
-  // Checks the path string, not the real (symlink-resolved) target — a symlink inside the workspace
-  // could still point out. Local CLI = user's own risk; symlink/sandbox gating is a future task.
+  // Check path string containment within workspace root.
   return abs;
 }
+

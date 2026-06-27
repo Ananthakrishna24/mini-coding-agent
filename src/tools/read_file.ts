@@ -1,4 +1,4 @@
-// read_file: read a workspace text file whole, or a line window for paging through big files.
+// Tool for reading text files in the workspace, with optional line range pagination.
 import fs from "node:fs/promises";
 import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
@@ -33,10 +33,10 @@ export const read_file: Tool = {
     const isPartialView = offset !== undefined || limit !== undefined;
     if (!isPartialView) {
       noteFileRead(abs, stat.mtimeMs, false);
-      return text; // whole-file: byte-identical, no header
+      return text;
     }
 
-    // Validate the optional window at the trust boundary — these come straight from the model.
+    // Validate the optional window parameters.
     const from = offset ?? 1;
     if (typeof from !== "number" || !Number.isInteger(from) || from < 1) {
       throw new Error("read_file: 'offset' must be a positive integer (1-based line number)");
@@ -50,7 +50,8 @@ export const read_file: Tool = {
     const start = from - 1;
     const end = typeof limit === "number" ? start + limit : undefined;
     const slice = lines.slice(start, end);
-    // Tell the model where this window sits so it can page on without re-guessing the offset.
+    // Return slice with line number header.
     return `# lines ${from}-${start + slice.length} of ${lines.length}\n${slice.join("\n")}`;
   },
 };
+

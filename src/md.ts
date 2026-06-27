@@ -1,8 +1,4 @@
-// Tiny Markdown → terminal renderer for the agent's final answer. No dependency, no CommonMark
-// ambition: headings, bold/italic/inline-code, bullet & numbered lists, blockquotes, fenced code,
-// and GitHub pipe tables — the shapes a coding agent actually emits.
-// Naive line/regex parser, not a real one. Nested emphasis or exotic Markdown may render
-// imperfectly; reach for a parser lib only if this output is ever consumed as a real document.
+// Simple markdown-to-terminal renderer supporting lists, tables, code blocks, and emphasis.
 
 export type Palette = {
   bold: (s: string) => string;

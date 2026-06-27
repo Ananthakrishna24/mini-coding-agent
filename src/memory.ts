@@ -1,24 +1,16 @@
-// Cross-run memory (Task 5.2): durable project notes the agent leaves for its future self in AGENT.md
-// at the workspace root. Read once at the top of each run and folded into the system prompt, so a fresh
-// process starts already knowing what past runs worked out — build commands, conventions, gotchas, the
-// user's standing preferences. No new storage: the agent maintains the file with its own edit_file
-// tool, and this just loads that file on the way in.
-//
-// Improved: adaptive budget based on context window, structured loading with priority sections.
+// Loads project notes from AGENT.md at the workspace root and folds them into the prompt.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 export const MEMORY_FILE = "AGENT.md";
 
-// Default budget for memory in the prompt. Adaptive: scales with the model's context window, but
-// never below a floor (small models) or above a ceiling (a bloated file shouldn't eat the budget).
+// Default memory budget scaling.
 const MIN_CHARS = 4_000;   // ~1k tokens — floor even for tiny-window models
 const MAX_CHARS = 16_000;  // ~4k tokens — ceiling to prevent runaway memory files
 const WINDOW_FRACTION = 0.04; // 4% of context window budget, if known
 
 /**
- * Compute the memory budget for a given context window size.
- * Adaptive: larger models get more memory budget, but always within bounds.
+ * Computes memory budget based on the model's context window.
  */
 export function memoryBudget(contextWindow?: number): number {
   if (!contextWindow || contextWindow <= 0) return MAX_CHARS; // default when window unknown
@@ -28,9 +20,7 @@ export function memoryBudget(contextWindow?: number): number {
 }
 
 /**
- * Prioritize memory sections: headings starting with "## " are treated as sections.
- * If truncation is needed, keep the first section (usually most important conventions)
- * and the last section (usually the most recent notes), dropping the middle.
+ * Truncates text, keeping the first section and the most recent sections.
  */
 function smartTruncate(text: string, limit: number): string {
   if (text.length <= limit) return text;
@@ -72,11 +62,7 @@ function smartTruncate(text: string, limit: number): string {
   return kept;
 }
 
-// Read the memory file into a ready-to-append prompt section, or "" when there's nothing usable. Never
-// throws — a missing, unreadable, or empty file just means "no memory this run", which must not break a
-// run. Takes the directory (defaults to the workspace) so the offline self-check can point it at a
-// fixture. Over-long memory is trimmed, not refused: memory should always load, but a bloated file gets
-// capped with a nudge to trim it.
+// Reads memory file and returns prompt block, defaulting to empty on errors.
 export function loadMemory(dir: string = process.cwd(), contextWindow?: number): string {
   let text: string;
   try {

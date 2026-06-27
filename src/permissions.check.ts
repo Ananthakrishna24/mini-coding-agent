@@ -39,7 +39,7 @@ for (const cmd of [
 
 // Known leak, asserted on purpose: `find . -delete` wipes a tree just like `rm -r` but isn't on
 // the list. A regex deny-list can't enumerate every spelling of "destroy" — this is exactly WHY
-// the real fence is an OS sandbox, not patterns (notes Task 4.2). Asserting it so nobody mistakes
+// the real fence is an OS sandbox, not patterns. Asserting it so nobody mistakes
 // the deny-list for a jail.
 assert.ok(check("run_bash", { command: "find . -delete" }).allow, "documented leak: find -delete slips the regex");
 

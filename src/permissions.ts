@@ -1,8 +1,4 @@
-// The safety layer: decide whether a tool call may run, before it runs.
-// Model output is untrusted — a file or web page the agent reads can carry an injected
-// "rm -rf …" that the model will dutifully try to run (prompt injection). So every call
-// passes this gate. A blocked call comes back to the model as an error result, never a
-// crash, so it recovers the same way it does from any other tool error.
+// Validates tool calls before execution to prevent destructive or unsafe actions.
 export type Decision = { allow: true } | { allow: false; reason: string };
 
 // Commands we never run. Each is irreversible (no undo) or escapes the workspace.

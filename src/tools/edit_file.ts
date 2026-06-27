@@ -1,6 +1,4 @@
-// edit_file: surgical edit — replace an exact text block with another, instead of rewriting the file.
-// old_string must match exactly and be unique (unless replace_all), so an edit can't silently hit the
-// wrong spot. This is the tool that makes the prompt's "prefer targeted edits over rewrites" real.
+// Tool for replacing specific text blocks in files.
 import fs from "node:fs/promises";
 import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
@@ -42,15 +40,14 @@ export const edit_file: Tool = {
     await requireFreshWholeFileRead(abs, "edit_file");
     const text = await readTextFile(abs);
 
-    const matches = text.split(old_string).length - 1; // literal count, no regex
+    const matches = text.split(old_string).length - 1; // Literal match count
     if (matches === 0) throw new Error("edit_file: 'old_string' not found in the file");
     const all = replace_all === true;
     if (matches > 1 && !all) {
       throw new Error(`edit_file: 'old_string' matches ${matches} places — add surrounding context to make it unique, or set replace_all`);
     }
 
-    // split/join (replace_all) and a function replacement (single) both insert new_string literally —
-    // a string replacement would treat $&, $1, etc. in new_string as backreferences.
+    // Use split/join or replacement function to avoid parsing replacement patterns like $& or $1
     const updated = all ? text.split(old_string).join(new_string) : text.replace(old_string, () => new_string);
     await writeAtomic(abs, updated);
     const stat = await fs.stat(abs);
@@ -60,3 +57,4 @@ export const edit_file: Tool = {
     return `edited ${p} (${n} replacement${n === 1 ? "" : "s"})`;
   },
 };
+

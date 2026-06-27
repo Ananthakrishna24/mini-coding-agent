@@ -1,5 +1,4 @@
-// The agent loop: call the model with tools, run any tool calls, feed results back, repeat
-// until the model finishes (final_answer or plain reply), stalls out, or hits the turn ceiling.
+// The agent loop: calls the model, executes tools, and manages context compaction.
 import { readFileSync } from "node:fs";
 import type OpenAI from "openai";
 import { chat, getContextWindow, getProvider } from "./llm";
@@ -11,26 +10,15 @@ import { skillsPromptBlock } from "./skills";
 import { thinkingVerb, toolVerb } from "./format";
 import type { UI } from "./ui";
 
-// Loop guards, outermost to innermost:
-//  - MAX_TURNS: absolute ceiling so a run is always bounded (override with AGENT_MAX_TURNS). High on
-//    purpose — it's a safety net, not the thing that should normally stop a run.
-//  - STALL_LIMIT: consecutive turns with no real progress = the model is spinning, stop. This is the
-//    real guard, so a long *productive* run keeps going and only a genuinely stuck one is cut.
-//  - REPEAT_LIMIT: the same call (name + args) seen this many times = a tight loop, stop immediately.
+// Loop guards to prevent infinite runs, stalls, or tight loops.
 const MAX_TURNS = Number(process.env.AGENT_MAX_TURNS) || 50;
 const STALL_LIMIT = 5;
 const REPEAT_LIMIT = 3;
 
-// "Progress" = a new, non-erroring call to a tool that reads or changes the world. Re-running a call
-// or only re-planning doesn't count, so a model that just spins its wheels still trips STALL_LIMIT.
+// Tool calls that count as progress (reading or writing state).
 const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "multi_edit", "run_bash"]);
 
-// Standing orders live in prompts/system.md — editable without touching code, read once at startup.
-// Fixed block first, environment last: an identical prefix is what lets the provider cache it across
-// turns, and the cache match stops at the first byte that differs.
-// The published build inlines the prompt as a minified JS string (tsup `--loader .md=text`) so the
-// dist ships no plaintext system.md; dev (tsx) can't load .md, so it falls back to reading the file.
-// Cosmetic deterrent only — the prompt is sent to the LLM, so a proxy recovers it regardless.
+// Load system rules from prompts/system.md, with fallback for development.
 let SYSTEM_RULES: string;
 try {
   SYSTEM_RULES = ((await import("./prompts/system.md")) as { default: string }).default.trim();
@@ -38,8 +26,7 @@ try {
   SYSTEM_RULES = readFileSync(new URL("./prompts/system.md", import.meta.url), "utf8").trim();
 }
 
-// GPT-5-series addendum (prompts/system.openai.md), appended only for the OpenAI provider — loaded the
-// same dual way as the base rules: inlined string in the dist build, file read in dev (tsx).
+// Load OpenAI-specific rules addendum.
 let OPENAI_RULES: string;
 try {
   OPENAI_RULES = ((await import("./prompts/system.openai.md")) as { default: string }).default.trim();
@@ -51,30 +38,20 @@ function buildSystemPrompt(): string {
   const env = [
     `Working directory: ${process.cwd()}`,
     `Platform: ${process.platform}`,
-    `Date: ${new Date().toISOString().slice(0, 10)}`, // date, not time — a clock would bust the cache
+    `Date: ${new Date().toISOString().slice(0, 10)}`, // date only to preserve prompt cache
   ].join("\n");
 
-  // Changing-last block: environment (changes daily) then memory (changes whenever the agent edits its
-  // notes) sit after the fixed rules, so the big cacheable prefix stays byte-identical across runs.
-  // Empty when there's no AGENT.md, so a fresh project carries no dangling section.
+  // Load project memory/notes.
   const memory = loadMemory(process.cwd(), getContextWindow());
-  // GPT-5 gets its tuned addendum right after the shared rules (still before the changing env/memory tail,
-  // so the cacheable head stays stable within a session). Provider is fixed per session, so this branch is
-  // stable too. ponytail: a cross-provider subagent would still get the parent's provider here — the harness
-  // routes every call through one provider's client anyway (see llm.ts), so that case can't arise yet.
+  // Apply provider-specific rules.
   const rules = getProvider() === "openai" ? `${SYSTEM_RULES}\n\n${OPENAI_RULES}` : SYSTEM_RULES;
-  // Skills index sits in the cacheable head too (it's stable per session — skills don't change mid-run).
-  // Empty when there's no skills dir, so it adds nothing on a checkout without one.
+  // Include skills index if present.
   const skills = skillsPromptBlock();
-  // Injected, variable blocks are XML-fenced a clear data-vs-rules
-  // boundary the model parses reliably, and — since memory/skills carry user-controlled content — a
-  // fence that keeps that content read as data, not as new instructions. Standing rules stay Markdown.
+  // Return the combined system prompt, wrapping dynamic values in XML tags.
   return `${rules}${skills ? `\n\n${skills}` : ""}\n\n<environment>\n${env}\n</environment>${memory ? `\n\n${memory}` : ""}`;
 }
 
-// A UI that swallows a subagent's live chatter — used when several subagents run in parallel, where
-// interleaved per-tool output from all of them would be unreadable. The parent still shows each child's
-// start and its ✓/✗ result; warnings pass through so failures aren't silent.
+// Quiet UI wrapper that suppresses subagent output when running in parallel.
 const quietUI = (ui: UI): UI => ({
   thinking: () => {},
   thought: () => {},
@@ -91,12 +68,7 @@ const quietUI = (ui: UI): UI => ({
   requestModelPolicy: async () => "parent",
 });
 
-// `depth` is the delegation level: 0 = the top agent, ≥1 = a subagent. It scopes whether the run may
-// delegate again (bounded by MAX_DEPTH) and is incremented on each spawn. Callers run normally by
-// omitting it. `history` is the live message array for an ongoing session: pass the same one across
-// turns and the model sees the whole conversation. Omit it (one-shots) for a clean context. `opts`
-// overrides the model/effort for this run — a subagent assigned a different model passes it. The system
-// prompt is built once, on the first turn, so the cacheable head stays byte-identical.
+// Main agent run loop.
 export async function run(
   goal: string | OpenAI.ChatCompletionContentPart[],
   ui: UI,
@@ -108,11 +80,11 @@ export async function run(
   if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
   messages.push({ role: "user", content: goal });
 
-  const schemas = schemasFor(depth); // depth gates whether this run is offered spawn_agent
-  const seen = new Map<string, number>(); // tool-call signature -> times seen this run; catches no-progress loops
-  const subSessions = new Map<string, OpenAI.ChatCompletionMessageParam[]>(); // child histories kept for resume
-  let subCounter = 0; // names this run's subagents (sub-1, sub-2, …)
-  let stall = 0; // consecutive turns with no real progress; trips STALL_LIMIT before MAX_TURNS
+  const schemas = schemasFor(depth); // depth gates spawning capability
+  const seen = new Map<string, number>(); // signature -> count to detect loops
+  const subSessions = new Map<string, OpenAI.ChatCompletionMessageParam[]>();
+  let subCounter = 0;
+  let stall = 0; // turns without progress
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     if (opts?.signal?.aborted) {
@@ -135,41 +107,32 @@ export async function run(
     const msg = choice.message;
     messages.push(msg);
 
-    // Reasoning models return their chain-of-thought in `reasoning` (an OpenRouter extension, not in the
-    // SDK types). Surface it as a one-line "thought for Ns" — only when the model actually reasoned, so
-    // non-reasoning models stay quiet. Times the whole call, not the reasoning span alone (no
-    // streaming to separate them); switch to streamed deltas if that split ever matters.
+    // Render reasoning duration if available (e.g. from OpenRouter).
     const reasoning = (msg as any).reasoning;
     if (typeof reasoning === "string" && reasoning.trim()) ui.thought(Math.round((Date.now() - t0) / 1000));
 
-    // Output hit the token cap mid-reply — don't treat a cut-off answer as a finished one.
+    // Warn if the completion was truncated.
     if (choice.finish_reason === "length") {
       ui.warn("model output truncated (hit max output tokens)");
     }
 
-    // Model stopped without calling final_answer — best-effort wrap of its prose so the caller still
-    // gets a uniform result. The structured path below is the intended exit.
+    // Fallback if the model did not call final_answer.
     if (!msg.tool_calls?.length) return { success: true, summary: msg.content ?? "(no output)" };
 
-    let progressed = false; // did this turn do real, new work? a productive turn resets the stall counter
+    let progressed = false; // tracks if any progress-marked tool was run successfully
     const calls = msg.tool_calls;
-    // Several spawn_agent calls in one turn run concurrently; when there's more than one, each child
-    // reports through a quiet UI so their tool output doesn't interleave into noise. A lone spawn keeps
-    // the live nested view. Independent subagents finish in the slowest one's time, not the sum.
+    // Concurrent subagents use a quiet UI to prevent interleaved console noise.
     const spawnCount = calls.filter((c) => c.type === "function" && c.function.name === "spawn_agent").length;
     const parallel = spawnCount > 1;
     const childUI = parallel ? quietUI(ui) : ui;
 
-    // First delegation of a session: ask the user once, here, before any subagent runs, how subagents
-    // should pick a model. The run pauses on the overlay until answered. Only the top agent asks (a
-    // subagent has no user); the choice is then read at every depth when launching a child.
+    // Prompt the user for model selection policy on first spawn.
     if (depth === 0 && spawnCount > 0 && getModelPolicy() === null) {
       setModelPolicy(await ui.requestModelPolicy());
     }
-    const allowCustomModel = getModelPolicy() === "auto"; // "parent" ignores the agent's per-task model picks
+    const allowCustomModel = getModelPolicy() === "auto";
 
-    // One result slot per call, filled in call order even though spawns finish out of order — every
-    // tool_call needs its matching result, and the result order must line up or the next request fails.
+    // Map of results aligned with tool calls order.
     const results: (string | null)[] = new Array(calls.length).fill(null);
     const pending: Promise<void>[] = []; // in-flight subagent runs
     let terminal: RunResult | null = null; // set by final_answer or a repeat-stop; ends the run after this turn
@@ -185,8 +148,7 @@ export async function run(
         continue;
       }
 
-      // No-progress guard: identical call (name + args) repeated = the model is stuck. Stop cheaply
-      // instead of feeding the loop turns until MAX_TURNS.
+      // Stop if identical tool call is repeated.
       const sig = `${call.function.name}(${call.function.arguments})`;
       const count = (seen.get(sig) ?? 0) + 1;
       seen.set(sig, count);
@@ -197,8 +159,7 @@ export async function run(
         break;
       }
 
-      // Terminal signal. A valid payload ends the run with structured data; a malformed one comes back
-      // as an error so the model can correct the shape. Truncated args fail JSON.parse and take that path.
+      // Terminate run on final_answer.
       if (call.function.name === "final_answer") {
         try {
           terminal = parseFinalAnswer(call.function.arguments);
@@ -210,9 +171,7 @@ export async function run(
         }
       }
 
-      // Delegation. Intercepted, not dispatched: running it recurses into run() with depth + 1. The
-      // subagent works in its own message array, kept in subSessions so the parent can resume it later;
-      // only its summary crosses back. A throwing child becomes a failure result, never a crash.
+      // Recursively spawn subagent.
       if (call.function.name === "spawn_agent") {
         if (!canSpawn(depth)) {
           const blocked = `error: blocked: subagent depth limit (${MAX_DEPTH}) reached — do this part yourself`;
@@ -237,10 +196,10 @@ export async function run(
           continue;
         }
         const id = sa.resume_id ?? `sub-${++subCounter}`;
-        const subModel = allowCustomModel ? sa.model : undefined; // "parent" policy → ignore the requested model
+        const subModel = allowCustomModel ? sa.model : undefined;
         const subEffort = allowCustomModel ? sa.effort ?? null : null;
         if (!parallel) ui.enterSubagent(subModel ? `${sa.goal}  ·  ${subModel}` : sa.goal);
-        progressed = true; // a delegation is real work, even if it ultimately fails
+        progressed = true;
         const i = idx;
         const args = call.function.arguments;
         pending.push(
@@ -253,7 +212,7 @@ export async function run(
             }
             subSessions.set(id, subHistory!);
             const out = formatSubResult(sub, id);
-            if (parallel) ui.tool("spawn_agent", args, out); // render as a completed entry; no live nesting
+            if (parallel) ui.tool("spawn_agent", args, out);
             else ui.exitSubagent(out);
             results[i] = out;
           })(),
@@ -286,66 +245,62 @@ export async function run(
     }
 
     if (parallel) ui.thinking(true, `running ${spawnCount} subagents`);
-    await Promise.allSettled(pending); // wait for all subagents; allSettled means one failing can't abandon the rest
+    await Promise.allSettled(pending); // Wait for all subagents to finish.
     if (parallel) ui.thinking(false);
 
     if (opts?.signal?.aborted) {
       return { success: false, summary: "Interrupted by user" };
     }
 
-    // Every tool_call gets its matching result, in call order.
+    // Append tool results to history.
     for (let idx = 0; idx < calls.length; idx++) {
       messages.push({ role: "tool", tool_call_id: calls[idx].id, content: results[idx] ?? "error: tool call not processed" });
     }
     if (terminal) return terminal;
 
-    // Stall guard: too many barren turns in a row means the model is looping or stuck on something it
-    // can't crack. Stop with a useful message instead of grinding all the way to MAX_TURNS.
+    // Stall guard: stop if no progress is made for several turns.
     if (progressed) stall = 0;
     else if (++stall >= STALL_LIMIT) {
       return { success: false, summary: `stopped: no progress in ${STALL_LIMIT} turns — the model looks stuck` };
     }
 
-    // Watch context size. Budget tracks the active model's window (switchable at runtime). Real usage
-    // is ground truth; our estimate decides when to act later. Feed the % to the footer either way.
+    // Track and report context usage.
     const budget = inputBudget(getContextWindow());
     const used = countMessages(messages);
     const actual = res.usage?.prompt_tokens;
     ui.context(actual ?? used, budget);
-    if (res.usage) ui.usage(res.usage.prompt_tokens ?? 0, res.usage.completion_tokens ?? 0); // feeds /usage
+    if (res.usage) ui.usage(res.usage.prompt_tokens ?? 0, res.usage.completion_tokens ?? 0);
     ui.debug(`context: ~${used} est${actual ? ` / ${actual} actual` : ""} of ${budget} budget`);
 
     // ── Tiered compaction ────────────────────────────────────────────────────
-    // Proactive: run compaction BEFORE we're over budget, not after. The three
-    // tiers fire at increasing pressure levels:
-    //  - micro-compact (75%): truncate stale tool results — free, no LLM call
-    //  - LLM summarize (90%): ask the model to produce a structured summary
-    //  - hard-drop (98%): emergency middle-removal, last resort
+    // Compaction runs before exceeding budget:
+    // - micro (75%): truncate old tool output
+    // - summary (90%): LLM summarizes history
+    // - drop (98%): emergency message drop
     const compaction = compact(messages, budget);
     if (compaction.tier === "micro") {
       ui.debug(`micro-compact: ${compaction.description}`);
     } else if (compaction.tier === "summary") {
-      // Tier 2: LLM-based summarization — ask the model to compress the history.
       ui.debug(`context pressure high — running LLM summarization`);
       try {
         ui.thinking(true, "compacting context");
         const summaryRes = await chat(
           [
             messages[0], // system prompt
-            ...messages.slice(1), // full conversation
+            ...messages.slice(1),
             { role: "user", content: COMPACT_PROMPT },
           ],
-          undefined, // no tools for summarization
+          undefined,
           opts,
         );
         ui.thinking(false);
         const rawSummary = summaryRes.choices?.[0]?.message?.content ?? "";
         if (rawSummary.trim()) {
           const formattedSummary = formatCompactSummary(rawSummary);
-          // Replace everything between system prompt and recent tail with the summary
+          // Replace intermediate history with the summary.
           const keepTail = Math.min(8, messages.length - 2);
           const tail = messages.slice(-keepTail);
-          messages.length = 1; // keep system prompt
+          messages.length = 1;
           messages.push({ role: "user", content: formattedSummary });
           messages.push(...tail);
           ui.warn(`context summarized — compressed ${compaction.description}`);
@@ -355,7 +310,6 @@ export async function run(
         if (opts?.signal?.aborted || e.name === "AbortError" || e.message === "The user aborted a request.") {
           return { success: false, summary: "Interrupted by user" };
         }
-        // Summarization failed — fall through to hard-drop if still over budget
         ui.debug(`summarization failed: ${e.message ?? e}`);
         if (overBudget(messages, budget)) {
           const result = compact(messages, budget);

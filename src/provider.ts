@@ -1,6 +1,4 @@
-// Provider config: which LLM service to talk to, and the .env plumbing onboarding writes. Pure
-// functions only (no SDK, no network, no import-time side effects) so the model client, the
-// onboarding screen, and the offline self-check can all share this without booting a client.
+// Provider configuration and env file management logic.
 
 export type Provider = "openrouter" | "openai" | "mistral";
 

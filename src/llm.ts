@@ -1,7 +1,4 @@
-// Chat client — the model-I/O layer the agent is built on. Talks to either OpenRouter or OpenAI
-// (OpenAI-compatible API; same SDK, different baseURL + key); the provider is resolved from the
-// environment. The model is switchable at runtime (/model command); the catalog + per-model
-// context/price come from the provider's own API and degrade gracefully when unavailable.
+// Chat client interface for interacting with configured LLM providers.
 import OpenAI from "openai";
 import { resolveProvider, PROVIDERS, reasoningParams, openaiReasons, openaiVision, mistralVision, type Provider } from "./provider";
 

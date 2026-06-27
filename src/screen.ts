@@ -1,11 +1,4 @@
-// A pinned bottom footer: reserve the last rows of the terminal, let everything else scroll above it.
-// Native ANSI only — uses the terminal scroll region (DECSTBM) so normal console.log keeps scrolling
-// inside rows 1..(bottom) while the footer stays put. No TUI library, no raw mode (readline owns the
-// keyboard between runs; the footer only lives during a run), so the two never fight.
-//
-// Mechanics: set the scroll region to exclude the bottom `h` rows, park the cursor inside it, then
-// redraw the footer rows on demand with save/restore-cursor around the writes so logging is unaffected.
-// Degrades to nothing off a TTY (piped/CI) — callers print the same content inline instead.
+// Manages a pinned terminal footer using scroll regions (DECSTBM).
 
 const out = process.stdout;
 const isTTY = () => out.isTTY === true && !process.env.NO_COLOR;

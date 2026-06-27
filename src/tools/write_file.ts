@@ -1,4 +1,4 @@
-// write_file: create or overwrite a whole workspace text file. For changing part of a file, use edit_file.
+// Tool for creating or overwriting workspace text files.
 import fs from "node:fs/promises";
 import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";

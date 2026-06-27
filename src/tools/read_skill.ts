@@ -1,6 +1,4 @@
-// read_skill: load a bundled skill's full playbook by name. The system prompt lists what's available
-// (name + description under "## Skills"); this returns the body of the one the model picks, on demand —
-// progressive disclosure, so the full instructions only enter context when they're actually needed.
+// Tool for reading the full playbook/instructions for a specific skill.
 import type { Tool } from "./types";
 import { readSkill } from "../skills";
 

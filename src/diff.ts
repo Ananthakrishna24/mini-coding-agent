@@ -1,6 +1,4 @@
-// Minimal line-level diff for the CLI's per-edit view — no dependency. Classic LCS table, then
-// walk it into "-" (removed) / "+" (added) / " " (kept) lines, unified-diff style.
-// O(n*m) time and memory — fine for an edit-sized block, not for diffing whole files.
+// Minimal line-level diff for CLI per-edit view using a classic LCS table.
 export type DiffLine = { tag: " " | "-" | "+"; text: string };
 
 export function diffLines(a: string[], b: string[]): DiffLine[] {

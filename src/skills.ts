@@ -1,8 +1,4 @@
-// Bundled skills: curated capability playbooks the agent loads on demand. The system prompt lists each
-// skill's name + description (progressive disclosure — cheap to keep in context every turn); the model
-// pulls a full body only when it's relevant, via the read_skill tool. Skills ship as files beside the
-// build (see package.json "files"), so the dir is resolved relative to this module — same in dev (src/)
-// and in the published dist (dist/), since `../skills` lands at the package root either way.
+// Scans and exposes modular skills that can be progressively loaded by the agent.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

@@ -1,10 +1,5 @@
 #!/usr/bin/env node
-// CLI shell. Three modes:
-//  - goal on the command line → run once, print, exit with a real code (scriptable).
-//  - interactive TTY → the Ink chat UI (app.tsx): chat scrollback, /commands, live status.
-//  - interactive non-TTY (piped stdin) → a minimal readline loop that runs each line as a goal.
-// ./llm throws at import if no provider key is set, so anything importing it is loaded dynamically
-// AFTER the first-run onboarding step has had a chance to write one.
+// CLI shell supporting one-shot, interactive TTY, and piped stdin modes.
 import { createElement } from "react";
 import { render } from "ink";
 import { createInterface } from "node:readline/promises";

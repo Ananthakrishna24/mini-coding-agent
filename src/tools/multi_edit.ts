@@ -1,11 +1,4 @@
-// multi_edit: apply several exact-text replacements in one call, across one or more workspace files,
-// as a single all-or-nothing batch. This is the leverage tool for a refactor: instead of one
-// edit_file round-trip per change, the model sends the whole set and the harness applies them
-// transactionally. Every edit is validated and applied to an in-memory working copy first; nothing is
-// written until all of them succeed, so a failing edit can never leave a half-applied change on disk.
-//
-// Edits run in array order. Two edits on the same file stack — a later one sees the earlier one's
-// result — which is what lets the model rename a symbol and then touch the renamed line in one batch.
+// Tool for applying multiple exact-text replacements across one or more files atomically.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Tool } from "./types";
@@ -57,9 +50,7 @@ export const multi_edit: Tool = {
       throw new Error("multi_edit: 'edits' must be a non-empty array");
     }
 
-    // Working copies keyed by absolute path; original first-seen display path and a running
-    // replacement count travel alongside for the summary. Loaded lazily so each file is read (and
-    // freshness-checked) exactly once, no matter how many edits target it.
+    // Tracks working copies, display paths, and replacement counts.
     const working = new Map<string, string>();
     const display = new Map<string, string>();
     const counts = new Map<string, number>();
@@ -77,7 +68,7 @@ export const multi_edit: Tool = {
 
       const abs = resolveInWorkspace(e.path);
       if (!working.has(abs)) {
-        await requireFreshWholeFileRead(abs, "multi_edit"); // throws before any write — batch stays atomic
+        await requireFreshWholeFileRead(abs, "multi_edit"); // Ensure file is fresh
         working.set(abs, await readTextFile(abs));
         display.set(abs, e.path);
         counts.set(abs, 0);
@@ -85,25 +76,23 @@ export const multi_edit: Tool = {
       }
 
       const text = working.get(abs)!;
-      const matches = text.split(e.old_string).length - 1; // literal count, no regex
+      const matches = text.split(e.old_string).length - 1; // Literal match count
       if (matches === 0) throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' not found in the file`);
       const all = e.replace_all === true;
       if (matches > 1 && !all) {
         throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' matches ${matches} places — add surrounding context to make it unique, or set replace_all`);
       }
 
-      // split/join (replace_all) and a function replacement (single) both insert new_string literally —
-      // a string replacement would treat $&, $1, etc. in new_string as backreferences.
+      // Use split/join or replacement function to avoid parsing replacement patterns.
       working.set(abs, all ? text.split(e.old_string).join(e.new_string) : text.replace(e.old_string, () => e.new_string));
       counts.set(abs, counts.get(abs)! + (all ? matches : 1));
     }
 
-    // Every edit validated and applied in memory — commit now. Nothing above touched disk, so a throw
-    // anywhere in the loop leaves the tree exactly as it was.
+    // Commit all changes atomically.
     for (const abs of order) {
       await writeAtomic(abs, working.get(abs)!);
       const stat = await fs.stat(abs);
-      noteFileRead(abs, stat.mtimeMs, false); // keep the file editable later this run without a re-read
+      noteFileRead(abs, stat.mtimeMs, false); // Record read status
     }
 
     const parts = order.map((abs) => {
@@ -113,3 +102,4 @@ export const multi_edit: Tool = {
     return `edited ${order.length} file${order.length === 1 ? "" : "s"}: ${parts.join(", ")}`;
   },
 };
+

@@ -1,7 +1,4 @@
-// Pure rendering: turn agent events (tool calls, diffs, plans, results) into colored text rows.
-// No console, no Ink, no React — just strings — so both the plain console UI (ui.ts, one-shot mode)
-// and the Ink UI (app.tsx, interactive) render identically. Color is util.styleText (Node ≥20),
-// gated on a TTY so piped/CI/NO_COLOR output stays plain and grep-able.
+// Formats agent events (tool calls, diffs, plans, results) into colored text rows.
 import { styleText } from "node:util";
 import { createRequire } from "node:module";
 const VERSION: string = (createRequire(import.meta.url)("../package.json") as { version: string }).version;

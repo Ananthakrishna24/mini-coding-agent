@@ -26,7 +26,7 @@ export const web_search: Tool = {
       const timeoutSignal = AbortSignal.timeout(8000);
       const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 
-      // s.jina.ai now requires a (free) API key. Reader r.jina.ai is still keyless (web_fetch).
+      // Jina search may require an API key.
       const headers: Record<string, string> = { Accept: "text/plain" };
       const jinaKey = process.env.JINA_API_KEY?.trim();
       if (jinaKey) headers.Authorization = `Bearer ${jinaKey}`;

@@ -1,6 +1,4 @@
-// Chat sessions on disk: the interactive session's message thread is saved so /resume can list past
-// chats and reopen one. One JSON file per session under ~/.mini-agent/sessions, keyed by a sortable id.
-// Best-effort throughout — a read/write failure degrades to "no sessions", never crashes the UI.
+// Manages persistent chat sessions on disk to allow listing and resuming past chats.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";

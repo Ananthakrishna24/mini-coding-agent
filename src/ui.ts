@@ -1,6 +1,4 @@
-// Plain console UI: color, a spinner, and the run-log the agent reports through. Used for one-shot
-// (scriptable) mode and any non-TTY pipe; the interactive TTY uses the Ink UI (app.tsx) instead.
-// Everything degrades to plain text when stdout isn't a TTY, so piped/CI output stays grep-able.
+// Plain console UI reporter for non-interactive or piped mode execution.
 import { homedir } from "node:os";
 import { setFooter, clearFooter, cleanup as screenCleanup } from "./screen";
 import type { ModelInfo } from "./llm";

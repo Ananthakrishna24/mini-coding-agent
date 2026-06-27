@@ -1,14 +1,4 @@
-// update_plan: the agent's working memory for a multi-step job. The model calls this to write or
-// revise its todo list; the rendered checklist comes straight back as the result, so the plan
-// re-enters the conversation and the model re-reads its own latest plan every turn. That's what
-// keeps it on-rails over a long run and across compaction (Module 3) — the plan is restated near
-// the bottom of the history instead of buried at the top.
-//
-// It's a real dispatch tool, not a terminal signal like final_answer: it runs, validates, and
-// returns. Its only effect is on the *conversation*, not the world. The model sends the whole list
-// every call (replace, not diff) — simpler contract, less for the model to get wrong. An optional
-// one-line `explanation` rides along to record *why* a revision happened (what was learned, why the
-// shape changed); it's prepended to the rendered plan so the rationale re-enters context too.
+// Tool for managing a todo checklist of steps for a multi-step task.
 import type { Tool } from "./types";
 
 const STATUSES = ["pending", "in_progress", "completed"] as const;
@@ -17,8 +7,7 @@ type Step = { step: string; status: Status };
 
 const MARK: Record<Status, string> = { completed: "[x]", in_progress: "[~]", pending: "[ ]" };
 
-// Pure renderer — a checkbox list, compact and readable in the run log. Exported so the offline
-// self-check can hit it directly.
+// Renders the plan steps to a string checklist.
 export function renderPlan(plan: Step[]): string {
   return plan.map((s) => `${MARK[s.status]} ${s.step}`).join("\n");
 }
@@ -60,8 +49,7 @@ export const update_plan: Tool = {
       },
     },
   },
-  // Validate at the boundary like every tool. Throws on bad input; dispatch turns the throw into an
-  // `error: …` result the model can correct (Task 4.1) — never a crash.
+  // Validate input parameters.
   async run({ plan, explanation }) {
     if (!Array.isArray(plan) || plan.length === 0) {
       throw new Error("update_plan: 'plan' must be a non-empty array of steps");
@@ -79,15 +67,13 @@ export const update_plan: Tool = {
       return { step: s.step.trim(), status: s.status };
     });
 
-    // Soft invariant from real harnesses: one step in flight at a time keeps the model focused and
-    // "where are we?" answerable at a glance.
+    // Ensure at most one step is in_progress.
     const inProgress = steps.filter((s) => s.status === "in_progress").length;
     if (inProgress > 1) {
       throw new Error(`update_plan: only one step may be 'in_progress' at a time (got ${inProgress})`);
     }
 
-    // Bare checklist when there's no note, so the common path stays clean; prepend the one-liner
-    // when given so the rationale rides back into context alongside the plan.
+    // Prepend the explanation note if provided.
     const note = typeof explanation === "string" ? explanation.trim() : "";
     return note ? `${note}\n\n${renderPlan(steps)}` : renderPlan(steps);
   },

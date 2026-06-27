@@ -1,7 +1,4 @@
-// list_models: hand the model the curated model catalog (prompts/models.md) — which models exist, what
-// each is good at, and the reasoning effort to use. Kept out of the system prompt and fetched only when
-// the agent asks, so the always-on context stays lean. Read fresh on each call so a manual edit to the
-// catalog shows up without a restart.
+// Returns the model catalog from prompts/models.md.
 import { readFileSync } from "node:fs";
 import type { Tool } from "./types";
 

@@ -1,6 +1,4 @@
-// The interactive session's state + controller. Holds the chat history and live status, implements
-// the UI interface the agent loop reports through, drives runs, and handles slash commands. Plain TS
-// (no React) so app.tsx can subscribe to it as an external store via useSyncExternalStore.
+// State store and controller for the interactive CLI/Ink application.
 import type OpenAI from "openai";
 import { run } from "./agent";
 import { getModel, setModel, modelInfo, searchModels, getContextWindow, getEffort, setEffort, resetCatalog, type ModelInfo } from "./llm";

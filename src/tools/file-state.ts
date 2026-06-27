@@ -1,6 +1,4 @@
-// Tracks file freshness between read_file and write/edit tools. This mirrors the reference harness
-// safety contract: existing files must be read before they are overwritten or edited, and if they
-// changed after that read, the model must read again instead of applying a stale patch.
+// Tracks file read states to ensure changes are based on fresh file content.
 import fs from "node:fs/promises";
 
 export type FileReadState = {

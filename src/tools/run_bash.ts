@@ -1,4 +1,4 @@
-// run_bash: run a shell command in the workspace, returning combined output and the exit code.
+// Tool for running bash commands within the workspace directory.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Tool } from "./types";
@@ -6,7 +6,7 @@ import { WORKSPACE } from "./workspace";
 
 const execFileAsync = promisify(execFile);
 
-const TIMEOUT_MS = 120_000; // real builds/test suites run long; kill a hung command, don't stall the run
+const TIMEOUT_MS = 120_000; // 2 minutes timeout
 
 export const run_bash: Tool = {
   schema: {
@@ -29,8 +29,8 @@ export const run_bash: Tool = {
     try {
       const { stdout, stderr } = await execFileAsync("bash", ["-c", command], {
         cwd: WORKSPACE,
-        timeout: TIMEOUT_MS, // capResult trims the output later
-        maxBuffer: 10 * 1024 * 1024, // let verbose runs finish instead of dying on ENOBUFS
+        timeout: TIMEOUT_MS,
+        maxBuffer: 10 * 1024 * 1024, // 10MB buffer limit
         signal,
       });
       return `exit 0\n${stdout}${stderr}`;
@@ -38,12 +38,13 @@ export const run_bash: Tool = {
       if (e.name === "AbortError" || (e.killed && e.signal === "SIGTERM" && signal?.aborted)) {
         return `error: command interrupted by user\n${e.stdout ?? ""}${e.stderr ?? ""}`;
       }
-      // Timeout: execFile kills the process, so there's no exit code — say so plainly, not "exit ?".
+      // Process timeout.
       if (e.killed && e.signal) {
         return `error: command timed out after ${TIMEOUT_MS / 1000}s\n${e.stdout ?? ""}${e.stderr ?? ""}`;
       }
-      // Non-zero exit is a result the model should see, not a crash.
+      // Command failed with non-zero exit code.
       return `exit ${e.code ?? "?"}\n${e.stdout ?? ""}${e.stderr ?? e.message}`;
     }
   },
 };
+
