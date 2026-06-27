@@ -1,9 +1,19 @@
 // Offline self-check for provider resolution + .env merge — no model/network. Run: npm run check
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resolveProvider, mergeEnv, PROVIDERS, reasoningParams, openaiReasons, openaiVision, mistralVision } from "./provider";
 import { migrateEnvFile } from "./onboarding";
+import { createCodexFetch, parseJwtClaims, resolveOpenAICredential } from "./codex_auth";
+
+function tempCodexHome() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "minicode-codex-auth-"));
+}
+
+function jwt(payload: object): string {
+  return `${Buffer.from("{}").toString("base64url")}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
+}
 
 // --- resolveProvider ---
 
@@ -50,6 +60,41 @@ import { migrateEnvFile } from "./onboarding";
 {
   const r = resolveProvider({ MISTRAL_API_KEY: "ms-x", PROVIDER: "mistral" });
   assert.ok(!("error" in r) && r.provider === "mistral", "explicit PROVIDER=mistral works");
+}
+
+// explicit PROVIDER=openai can use Codex/ChatGPT auth instead of an API key
+{
+  const r = resolveProvider({ PROVIDER: "openai", CODEX_ACCESS_TOKEN: jwt({ chatgpt_account_id: "acc-1", exp: 4_102_444_800 }) });
+  assert.deepEqual(r, { provider: "openai", apiKey: "codex-login", authMode: "codex" }, "openai can resolve from CODEX_ACCESS_TOKEN");
+}
+
+// OPENAI_AUTH=codex forces Codex auth even if an OpenAI API key is present
+{
+  const r = resolveProvider({
+    PROVIDER: "openai",
+    OPENAI_API_KEY: "sk-x",
+    OPENAI_AUTH: "codex",
+    CODEX_ACCESS_TOKEN: jwt({ chatgpt_account_id: "acc-2", exp: 4_102_444_800 }),
+  });
+  assert.deepEqual(r, { provider: "openai", apiKey: "codex-login", authMode: "codex" }, "OPENAI_AUTH=codex forces Codex auth");
+}
+
+// Codex file auth is read from CODEX_HOME/auth.json when available
+{
+  const home = tempCodexHome();
+  fs.writeFileSync(path.join(home, "auth.json"), JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acc-file" }, exp: 4_102_444_800 }),
+      refresh_token: "refresh-file",
+    },
+  }));
+  const credential = resolveOpenAICredential({ CODEX_HOME: home });
+  assert.ok(credential && !("error" in credential) && credential.kind === "codex", "auth.json yields Codex credential");
+  assert.equal(credential.accountId, "acc-file", "account id is extracted from Codex token claims");
+  const r = resolveProvider({ PROVIDER: "openai", CODEX_HOME: home });
+  assert.deepEqual(r, { provider: "openai", apiKey: "codex-login", authMode: "codex" }, "openai can resolve from Codex auth.json");
 }
 
 // mistral loses tie-break to openrouter and openai
@@ -114,6 +159,85 @@ assert.equal(mergeEnv("", { OPENAI_API_KEY: "sk-x" }), "OPENAI_API_KEY=sk-x\n", 
 // exactly one trailing newline regardless of input
 assert.equal(mergeEnv("A=1\n\n\n", { B: "2" }).endsWith("2\n"), true, "single trailing newline");
 assert.ok(!mergeEnv("A=1", { B: "2" }).endsWith("\n\n"), "no double trailing newline");
+
+// --- Codex fetch bridge: redirects model calls and refreshes expired file-backed tokens ---
+
+assert.deepEqual(parseJwtClaims(jwt({ chatgpt_account_id: "acc-jwt" }))?.chatgpt_account_id, "acc-jwt", "JWT claims parse");
+
+{
+  let seenUrl = "";
+  let seenHeaders = new Headers();
+  let seenBody: any;
+  const fakeFetch: typeof fetch = async (input, init) => {
+    seenUrl = input.toString();
+    seenHeaders = new Headers(init?.headers);
+    seenBody = JSON.parse(String(init?.body));
+    return Response.json({ ok: true });
+  };
+
+  const codexFetch = createCodexFetch(
+    { kind: "codex", accessToken: "access-current", accountId: "acc-3", source: "env" },
+    { endpoint: "https://chatgpt.test/backend-api/codex/responses", fetchImpl: fakeFetch },
+  );
+  await codexFetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: "Bearer old", "x-test": "1" },
+    body: JSON.stringify({ model: "gpt-test", input: "hello", stream: true }),
+  });
+
+  assert.equal(seenUrl, "https://chatgpt.test/backend-api/codex/responses", "Responses calls route through Codex endpoint");
+  assert.equal(seenHeaders.get("authorization"), "Bearer access-current", "Codex bearer token replaces SDK auth");
+  assert.equal(seenHeaders.get("ChatGPT-Account-Id"), "acc-3", "Codex account id is forwarded");
+  assert.equal(seenHeaders.get("x-test"), "1", "non-auth headers are preserved");
+  assert.deepEqual(seenBody, { model: "gpt-test", input: "hello", stream: true }, "Codex fetch leaves the SDK request body intact");
+}
+
+{
+  const home = tempCodexHome();
+  const authPath = path.join(home, "auth.json");
+  fs.writeFileSync(authPath, JSON.stringify({
+    auth_mode: "chatgpt",
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: jwt({ chatgpt_account_id: "old", exp: 1 }),
+      refresh_token: "refresh-old",
+    },
+  }));
+
+  let refreshes = 0;
+  let seenAuth = "";
+  const fakeFetch: typeof fetch = async (input, init) => {
+    const url = input.toString();
+    if (url.endsWith("/oauth/token")) {
+      refreshes++;
+      assert.match(String(init?.body), /refresh_token=refresh-old/, "refresh token is sent to OpenAI auth");
+      return Response.json({
+        access_token: "access-new",
+        refresh_token: "refresh-new",
+        id_token: jwt({ chatgpt_account_id: "new" }),
+        expires_in: 3600,
+      });
+    }
+    seenAuth = new Headers(init?.headers).get("authorization") ?? "";
+    return new Response("{}", { status: 200 });
+  };
+
+  const credential = resolveOpenAICredential({ CODEX_HOME: home });
+  assert.ok(credential && !("error" in credential) && credential.kind === "codex", "expired file token still loads");
+  const codexFetch = createCodexFetch(credential, {
+    endpoint: "https://chatgpt.test/backend-api/codex/responses",
+    issuer: "https://auth.test",
+    fetchImpl: fakeFetch,
+  });
+
+  await codexFetch("https://api.openai.com/v1/chat/completions", { method: "POST", body: "{}" });
+  const saved = JSON.parse(fs.readFileSync(authPath, "utf8"));
+  assert.equal(refreshes, 1, "expired Codex token is refreshed once");
+  assert.equal(seenAuth, "Bearer access-new", "request uses refreshed token");
+  assert.equal(saved.tokens.access_token, "access-new", "refreshed token is saved back to auth.json");
+  assert.equal(saved.tokens.refresh_token, "refresh-new", "rotated refresh token is saved back to auth.json");
+  assert.equal(saved.tokens.account_id, "new", "refreshed account id is saved back to auth.json");
+}
 
 // --- reasoningParams: provider-shaped effort body, or {} when no effort set ---
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import { homedir } from "node:os";
 import { c, termWidth, getPrimaryColor } from "./format";
 import { PROVIDERS, resolveProvider, mergeEnv, type Provider } from "./provider";
+import { OPENAI_AUTH_CODEX, OPENAI_AUTH_ENV, resolveOpenAICredential } from "./codex_auth";
 
 // Where API keys are stored. The local .env (project dir) takes priority when it contains at least
 // one provider key; otherwise we fall back to a global config dir (~/.config/minicode/.env) that
@@ -23,7 +24,7 @@ const maskKey = (k: string) => (k.length <= 8 ? "•".repeat(k.length) : `${k.sl
 // Write/merge the chosen settings into the global .env with owner-only perms. The global path
 // (~/.config/minicode/.env) persists across directories — important when installed with npm -g.
 // Keeps unrelated lines intact.
-function writeEnv(updates: Record<string, string>): void {
+function writeEnv(updates: Record<string, string | null>): void {
   const dir = path.dirname(GLOBAL_ENV);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const existing = fs.existsSync(GLOBAL_ENV) ? fs.readFileSync(GLOBAL_ENV, "utf8") : "";
@@ -32,6 +33,11 @@ function writeEnv(updates: Record<string, string>): void {
 }
 
 type Step = "provider" | "key" | "model" | "done";
+type ProviderChoice = Provider | "codex";
+
+const choiceProvider = (choice: ProviderChoice): Provider => (choice === "codex" ? "openai" : choice);
+const choiceLabel = (choice: ProviderChoice) => choice === "codex" ? "Codex Login" : PROVIDERS[choice].label;
+const choiceHint = (choice: ProviderChoice) => choice === "codex" ? "~/.codex/auth.json or CODEX_ACCESS_TOKEN" : PROVIDERS[choice].keyVar;
 
 // Runs two ways: standalone at first launch (runOnboarding renders it before the main App and it calls
 // exit() when done), or as an in-app overlay for /setup (inApp: it calls onExit instead of tearing Ink
@@ -40,12 +46,13 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
   const { exit } = useApp();
   const [step, setStep] = useState<Step>("provider");
   const [provider, setProvider] = useState<Provider>("openrouter");
+  const [choice, setChoice] = useState<ProviderChoice>("openrouter");
   const [sel, setSel] = useState(0);
   const [key, setKey] = useState("");
   const [model, setModel] = useState("");
   const [error, setError] = useState("");
 
-  const providers: Provider[] = ["openrouter", "openai", "mistral"];
+  const providers: ProviderChoice[] = ["openrouter", "codex", "openai", "mistral"];
 
   useInput((input, k) => {
     if (k.ctrl && input === "c") {
@@ -61,10 +68,23 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
       if (k.upArrow) setSel((s) => (s + providers.length - 1) % providers.length);
       else if (k.downArrow) setSel((s) => (s + 1) % providers.length);
       else if (k.return) {
-        const p = providers[sel];
+        const chosen = providers[sel];
+        const p = choiceProvider(chosen);
+        if (chosen === "codex") {
+          const credential = resolveOpenAICredential({
+            ...process.env,
+            CODEX_HOME: process.env.CODEX_HOME ?? path.join(homedir(), ".codex"),
+            [OPENAI_AUTH_ENV]: OPENAI_AUTH_CODEX,
+          });
+          if (!credential || "error" in credential) {
+            setError("run `codex login` first, or set CODEX_ACCESS_TOKEN, then choose this again");
+            return;
+          }
+        }
+        setChoice(chosen);
         setProvider(p);
         setModel(PROVIDERS[p].defaultModel);
-        setStep("key");
+        setStep(chosen === "codex" ? "model" : "key");
         setError("");
       }
       return;
@@ -85,11 +105,10 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
       if (k.return) {
         const chosen = model.trim() || PROVIDERS[provider].defaultModel;
         try {
-          writeEnv({
-            [PROVIDERS[provider].keyVar]: key.trim(),
-            AGENT_MODEL: chosen,
-            PROVIDER: provider,
-          });
+          const updates: Record<string, string | null> = choice === "codex"
+            ? { PROVIDER: "openai", [OPENAI_AUTH_ENV]: OPENAI_AUTH_CODEX, AGENT_MODEL: chosen }
+            : { PROVIDER: provider, [OPENAI_AUTH_ENV]: null, [PROVIDERS[provider].keyVar]: key.trim(), AGENT_MODEL: chosen };
+          writeEnv(updates);
         } catch (e: any) {
           setError(`could not write .env: ${e.message ?? e}`);
           return;
@@ -110,7 +129,7 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
           <Text>{`👉 Choose a provider  ${c.dim("(↑↓ to navigate, ⏎ to select)")}`}</Text>
           {providers.map((p, i) => (
             <Text key={p} color={i === sel ? getPrimaryColor() : "gray"}>
-              {`  ${i === sel ? "▶" : " "} ${PROVIDERS[p].label.padEnd(12)} ${c.dim(PROVIDERS[p].keyVar)}`}
+              {`  ${i === sel ? "▶" : " "} ${choiceLabel(p).padEnd(12)} ${c.dim(choiceHint(p))}`}
             </Text>
           ))}
         </Box>
@@ -133,7 +152,7 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
       );
     }
     return (
-      <Text color="green">{`✔ Saved ${PROVIDERS[provider].label} configuration to ~/.config/minicode/.env`}</Text>
+      <Text color="green">{`✔ Saved ${choiceLabel(choice)} configuration to ~/.config/minicode/.env`}</Text>
     );
   };
 
@@ -144,7 +163,7 @@ export const Onboarding: FC<{ inApp?: boolean; onExit?: (saved: boolean, modelId
         <Text>{c.dim(inApp ? "Esc cancel · Ctrl+C quit" : "Ctrl+C quit")}</Text>
       </Box>
       <Text>{c.dim("─".repeat(termWidth() - 6))}</Text>
-      <Text>{c.dim("API Keys are stored securely on your machine (never transmitted).")}</Text>
+      <Text>{c.dim("API keys are stored locally; Codex login reuses your local Codex auth cache.")}</Text>
       <Box flexDirection="column" marginTop={1} marginBottom={1}>
         {renderStep()}
       </Box>
@@ -166,7 +185,8 @@ export async function runOnboarding(): Promise<boolean> {
       `  ${PROVIDERS.openrouter.keyVar}=...   (then PROVIDER=openrouter, optional)`,
       `  ${PROVIDERS.openai.keyVar}=...        (then PROVIDER=openai, optional)`,
       `  ${PROVIDERS.mistral.keyVar}=...      (then PROVIDER=mistral, optional)`,
-      "Add it to .env (see .env.example), or export it in your shell.",
+      "Or run `codex login` and set PROVIDER=openai with OPENAI_AUTH=codex.",
+      "Add it to .env (see .env.example), export it in your shell, or use interactive setup.",
     ];
     process.stderr.write(lines.join("\n") + "\n");
     process.exit(1);
