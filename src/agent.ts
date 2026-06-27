@@ -14,9 +14,22 @@ import type { UI } from "./ui";
 const MAX_TURNS = Number(process.env.AGENT_MAX_TURNS) || 50;
 const STALL_LIMIT = 5;
 const REPEAT_LIMIT = 3;
+const BARE_RESPONSE_LIMIT = 2;
 
 // Tool calls that count as progress (reading or writing state).
-const PROGRESS_TOOLS = new Set(["read_file", "write_file", "edit_file", "multi_edit", "run_bash"]);
+const PROGRESS_TOOLS = new Set([
+  "read_file",
+  "write_file",
+  "edit_file",
+  "multi_edit",
+  "run_bash",
+  "grep",
+  "glob",
+  "web_fetch",
+  "web_search",
+  "read_skill",
+  "list_models",
+]);
 
 // Load system rules from prompts/system.md, with fallback for development.
 let SYSTEM_RULES: string;
@@ -49,6 +62,20 @@ function buildSystemPrompt(): string {
   const skills = skillsPromptBlock();
   // Return the combined system prompt, wrapping dynamic values in XML tags.
   return `${rules}${skills ? `\n\n${skills}` : ""}\n\n<environment>\n${env}\n</environment>${memory ? `\n\n${memory}` : ""}`;
+}
+
+function contentText(content: OpenAI.ChatCompletionMessageParam["content"] | null | undefined): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part: any) => (part?.type === "text" && typeof part.text === "string" ? part.text : ""))
+    .join(" ")
+    .trim();
+}
+
+function clipText(s: string, max = 240): string {
+  const oneLine = s.replace(/\s+/g, " ").trim();
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
 }
 
 // Quiet UI wrapper that suppresses subagent output when running in parallel.
@@ -85,6 +112,7 @@ export async function run(
   const subSessions = new Map<string, OpenAI.ChatCompletionMessageParam[]>();
   let subCounter = 0;
   let stall = 0; // turns without progress
+  let bareResponses = 0; // assistant messages that violated the final_answer/tool protocol
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     if (opts?.signal?.aborted) {
@@ -116,8 +144,25 @@ export async function run(
       ui.warn("model output truncated (hit max output tokens)");
     }
 
-    // Fallback if the model did not call final_answer.
-    if (!msg.tool_calls?.length) return { success: true, summary: msg.content ?? "(no output)" };
+    // A bare assistant message is not a clean terminal state; ask once for the required final_answer
+    // call so simple Q&A can still recover, then fail clearly instead of returning a false success.
+    if (!msg.tool_calls?.length) {
+      const text = contentText(msg.content);
+      if (++bareResponses >= BARE_RESPONSE_LIMIT) {
+        return {
+          success: false,
+          summary: `stopped: model replied without calling final_answer${text ? ` — last reply: ${clipText(text)}` : ""}`,
+        };
+      }
+      messages.push({
+        role: "user",
+        content:
+          "You replied without calling any tool. If the task is complete, call final_answer now with success and a short summary. " +
+          "If work remains, call the appropriate tool instead of replying in prose.",
+      });
+      continue;
+    }
+    bareResponses = 0;
 
     let progressed = false; // tracks if any progress-marked tool was run successfully
     const calls = msg.tool_calls;

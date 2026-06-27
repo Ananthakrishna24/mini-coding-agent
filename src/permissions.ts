@@ -8,6 +8,7 @@ export type Decision = { allow: true } | { allow: false; reason: string };
 // Real containment is an OS sandbox (bubblewrap/Landlock, Seatbelt) with no net / no writes outside the tree.
 const DENY: { pattern: RegExp; reason: string }[] = [
   { pattern: /\brm\s+-\w*r/i,                              reason: "recursive delete (rm -r)" },
+  { pattern: /\bfind\b[^\n|;&]*\s-delete\b/i,               reason: "bulk delete (find -delete)" },
   { pattern: /\bsudo\b/i,                                  reason: "privilege escalation (sudo)" },
   { pattern: /\bgit\s+push\b/i,                            reason: "pushes to a remote — outside the workspace" },
   { pattern: /(curl|wget)[^\n|]*\|\s*(sudo\s+)?\w*sh\b/i,  reason: "pipes a download straight into a shell" },

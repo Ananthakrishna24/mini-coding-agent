@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Tool } from "./types";
 import { WORKSPACE } from "./workspace";
+import { prepareBashCommand } from "./sandbox";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,8 +28,10 @@ export const run_bash: Tool = {
   async run({ command }, signal) {
     if (typeof command !== "string") throw new Error("run_bash: 'command' must be a string");
     try {
-      const { stdout, stderr } = await execFileAsync("bash", ["-c", command], {
+      const prepared = await prepareBashCommand(command, WORKSPACE);
+      const { stdout, stderr } = await execFileAsync(prepared.program, prepared.args, {
         cwd: WORKSPACE,
+        env: prepared.env,
         timeout: TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer limit
         signal,
@@ -47,4 +50,3 @@ export const run_bash: Tool = {
     }
   },
 };
-

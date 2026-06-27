@@ -1,11 +1,11 @@
 // Tool for applying multiple exact-text replacements across one or more files atomically.
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Tool } from "./types";
 import { resolveInWorkspace, WORKSPACE } from "./workspace";
 import { writeAtomic } from "./atomic";
 import { readTextFile } from "./read-text";
-import { noteFileRead, requireFreshWholeFileRead } from "./file-state";
+import { forgetFileRead, requireFreshWholeFileRead } from "./file-state";
+import { withPathLocks } from "./path-locks";
 
 type EditArg = { path: string; old_string: string; new_string: string; replace_all?: boolean };
 
@@ -50,12 +50,8 @@ export const multi_edit: Tool = {
       throw new Error("multi_edit: 'edits' must be a non-empty array");
     }
 
-    // Tracks working copies, display paths, and replacement counts.
-    const working = new Map<string, string>();
-    const display = new Map<string, string>();
-    const counts = new Map<string, number>();
-    const order: string[] = [];
-
+    const parsed: Array<EditArg & { abs: string }> = [];
+    const lockPaths: string[] = [];
     for (let i = 0; i < edits.length; i++) {
       const e = edits[i] as EditArg;
       const at = `edit ${i + 1}`;
@@ -65,41 +61,55 @@ export const multi_edit: Tool = {
       }
       if (e.old_string === "") throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' is empty — use write_file to create a file`);
       if (e.old_string === e.new_string) throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' and 'new_string' are identical — nothing to change`);
-
       const abs = resolveInWorkspace(e.path);
-      if (!working.has(abs)) {
-        await requireFreshWholeFileRead(abs, "multi_edit"); // Ensure file is fresh
-        working.set(abs, await readTextFile(abs));
-        display.set(abs, e.path);
-        counts.set(abs, 0);
-        order.push(abs);
-      }
-
-      const text = working.get(abs)!;
-      const matches = text.split(e.old_string).length - 1; // Literal match count
-      if (matches === 0) throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' not found in the file`);
-      const all = e.replace_all === true;
-      if (matches > 1 && !all) {
-        throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' matches ${matches} places — add surrounding context to make it unique, or set replace_all`);
-      }
-
-      // Use split/join or replacement function to avoid parsing replacement patterns.
-      working.set(abs, all ? text.split(e.old_string).join(e.new_string) : text.replace(e.old_string, () => e.new_string));
-      counts.set(abs, counts.get(abs)! + (all ? matches : 1));
+      parsed.push({ ...e, abs });
+      lockPaths.push(abs);
     }
 
-    // Commit all changes atomically.
-    for (const abs of order) {
-      await writeAtomic(abs, working.get(abs)!);
-      const stat = await fs.stat(abs);
-      noteFileRead(abs, stat.mtimeMs, false); // Record read status
-    }
+    return await withPathLocks(lockPaths, async () => {
+      // Tracks working copies, display paths, and replacement counts.
+      const working = new Map<string, string>();
+      const display = new Map<string, string>();
+      const counts = new Map<string, number>();
+      const order: string[] = [];
 
-    const parts = order.map((abs) => {
-      const n = counts.get(abs)!;
-      return `${display.get(abs) ?? path.relative(WORKSPACE, abs)} (${n} replacement${n === 1 ? "" : "s"})`;
+      for (let i = 0; i < parsed.length; i++) {
+        const e = parsed[i];
+        const at = `edit ${i + 1}`;
+
+        const abs = e.abs;
+        if (!working.has(abs)) {
+          await requireFreshWholeFileRead(abs, "multi_edit"); // Ensure file is fresh
+          working.set(abs, await readTextFile(abs));
+          display.set(abs, e.path);
+          counts.set(abs, 0);
+          order.push(abs);
+        }
+
+        const text = working.get(abs)!;
+        const matches = text.split(e.old_string).length - 1; // Literal match count
+        if (matches === 0) throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' not found in the file`);
+        const all = e.replace_all === true;
+        if (matches > 1 && !all) {
+          throw new Error(`multi_edit: ${at} (${e.path}): 'old_string' matches ${matches} places — add surrounding context to make it unique, or set replace_all`);
+        }
+
+        // Use split/join or replacement function to avoid parsing replacement patterns.
+        working.set(abs, all ? text.split(e.old_string).join(e.new_string) : text.replace(e.old_string, () => e.new_string));
+        counts.set(abs, counts.get(abs)! + (all ? matches : 1));
+      }
+
+      // Commit all changes atomically.
+      for (const abs of order) {
+        await writeAtomic(abs, working.get(abs)!);
+        forgetFileRead(abs);
+      }
+
+      const parts = order.map((abs) => {
+        const n = counts.get(abs)!;
+        return `${display.get(abs) ?? path.relative(WORKSPACE, abs)} (${n} replacement${n === 1 ? "" : "s"})`;
+      });
+      return `edited ${order.length} file${order.length === 1 ? "" : "s"}: ${parts.join(", ")}`;
     });
-    return `edited ${order.length} file${order.length === 1 ? "" : "s"}: ${parts.join(", ")}`;
   },
 };
-

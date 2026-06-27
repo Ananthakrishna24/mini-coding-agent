@@ -4,6 +4,7 @@ import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
 import { readTextFile } from "./read-text";
 import { noteFileRead } from "./file-state";
+import { withPathLock } from "./path-locks";
 
 export const read_file: Tool = {
   schema: {
@@ -28,30 +29,31 @@ export const read_file: Tool = {
   async run({ path: p, offset, limit }) {
     if (typeof p !== "string") throw new Error("read_file: 'path' must be a string");
     const abs = resolveInWorkspace(p);
-    const text = await readTextFile(abs);
-    const stat = await fs.stat(abs);
-    const isPartialView = offset !== undefined || limit !== undefined;
-    if (!isPartialView) {
-      noteFileRead(abs, stat.mtimeMs, false);
-      return text;
-    }
+    return await withPathLock(abs, async () => {
+      const text = await readTextFile(abs);
+      const stat = await fs.stat(abs);
+      const isPartialView = offset !== undefined || limit !== undefined;
+      if (!isPartialView) {
+        noteFileRead(abs, stat.mtimeMs, false);
+        return text;
+      }
 
-    // Validate the optional window parameters.
-    const from = offset ?? 1;
-    if (typeof from !== "number" || !Number.isInteger(from) || from < 1) {
-      throw new Error("read_file: 'offset' must be a positive integer (1-based line number)");
-    }
-    if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) {
-      throw new Error("read_file: 'limit' must be a positive integer");
-    }
+      // Validate the optional window parameters.
+      const from = offset ?? 1;
+      if (typeof from !== "number" || !Number.isInteger(from) || from < 1) {
+        throw new Error("read_file: 'offset' must be a positive integer (1-based line number)");
+      }
+      if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) {
+        throw new Error("read_file: 'limit' must be a positive integer");
+      }
 
-    noteFileRead(abs, stat.mtimeMs, true);
-    const lines = text.split("\n");
-    const start = from - 1;
-    const end = typeof limit === "number" ? start + limit : undefined;
-    const slice = lines.slice(start, end);
-    // Return slice with line number header.
-    return `# lines ${from}-${start + slice.length} of ${lines.length}\n${slice.join("\n")}`;
+      noteFileRead(abs, stat.mtimeMs, true);
+      const lines = text.split("\n");
+      const start = from - 1;
+      const end = typeof limit === "number" ? start + limit : undefined;
+      const slice = lines.slice(start, end);
+      // Return slice with line number header.
+      return `# lines ${from}-${start + slice.length} of ${lines.length}\n${slice.join("\n")}`;
+    });
   },
 };
-

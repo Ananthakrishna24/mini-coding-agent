@@ -42,6 +42,7 @@ await dispatch("write_file", JSON.stringify({ path: ef, content: "alpha\nbeta\ng
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /has not been read completely/);
 await dispatch("read_file", JSON.stringify({ path: ef }));
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "beta", new_string: "BETA" })), /1 replacement/);
+assert.match(await dispatch("write_file", JSON.stringify({ path: ef, content: "stale overwrite" })), /has not been read completely/);
 assert.equal(await dispatch("read_file", JSON.stringify({ path: ef })), "alpha\nBETA\ngamma");
 // not found / ambiguous / no-op come back as results, never thrown
 assert.match(await dispatch("edit_file", JSON.stringify({ path: ef, old_string: "nope", new_string: "x" })), /not found/);

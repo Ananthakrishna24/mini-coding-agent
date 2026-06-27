@@ -4,6 +4,7 @@ import type { Tool } from "./types";
 import { resolveInWorkspace } from "./workspace";
 import { writeAtomic } from "./atomic";
 import { forgetFileRead, requireFreshWholeFileRead } from "./file-state";
+import { withPathLock } from "./path-locks";
 
 export const write_file: Tool = {
   schema: {
@@ -27,14 +28,16 @@ export const write_file: Tool = {
       throw new Error("write_file: 'path' and 'content' must be strings");
     }
     const abs = resolveInWorkspace(p);
-    try {
-      await fs.stat(abs);
-      await requireFreshWholeFileRead(abs, "write_file");
-    } catch (e: any) {
-      if (e?.code !== "ENOENT") throw e;
-    }
-    await writeAtomic(abs, content);
-    forgetFileRead(abs);
-    return `wrote ${Buffer.byteLength(content, "utf8")} bytes to ${p}`;
+    return await withPathLock(abs, async () => {
+      try {
+        await fs.stat(abs);
+        await requireFreshWholeFileRead(abs, "write_file");
+      } catch (e: any) {
+        if (e?.code !== "ENOENT") throw e;
+      }
+      await writeAtomic(abs, content);
+      forgetFileRead(abs);
+      return `wrote ${Buffer.byteLength(content, "utf8")} bytes to ${p}`;
+    });
   },
 };
