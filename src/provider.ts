@@ -1,4 +1,5 @@
 // Provider configuration and env file management logic.
+import { CODEX_DUMMY_API_KEY, resolveOpenAICredential, type OpenAIAuthMode } from "./codex_auth";
 
 export type Provider = "openrouter" | "openai" | "mistral";
 
@@ -25,7 +26,7 @@ export const PROVIDERS: Record<Provider, { label: string; baseURL: string | null
   },
 };
 
-export type Resolved = { provider: Provider; apiKey: string };
+export type Resolved = { provider: Provider; apiKey: string; authMode?: OpenAIAuthMode };
 
 // --- reasoning effort: the low|medium|high knob reasoning models take ---
 
@@ -56,6 +57,13 @@ export function mistralVision(id: string): boolean {
   return /pixtral/.test(id);
 }
 
+export function openaiAuthMode(env: Record<string, string | undefined> = process.env): OpenAIAuthMode | { error: string } | undefined {
+  const credential = resolveOpenAICredential(env);
+  if (!credential) return undefined;
+  if ("error" in credential) return credential;
+  return credential.kind === "codex" ? "codex" : "api-key";
+}
+
 // Decide which provider to use from the environment. Rule:
 //   1. an explicit PROVIDER wins (but only if its key is actually present);
 //   2. otherwise infer from whichever key is set;
@@ -63,9 +71,19 @@ export function mistralVision(id: string): boolean {
 //      provider and reaches the widest model set) — set PROVIDER=openai to override.
 // Returns the chosen provider + its key, or an error string explaining what's missing.
 export function resolveProvider(env: Record<string, string | undefined> = process.env): Resolved | { error: string } {
+  const openaiCredential = resolveOpenAICredential(env);
+  if (openaiCredential && "error" in openaiCredential) return openaiCredential;
+
   const has = (p: Provider) => {
+    if (p === "openai") return !!openaiCredential;
     const v = env[PROVIDERS[p].keyVar];
     return typeof v === "string" && v.trim().length > 0;
+  };
+  const key = (p: Provider) => {
+    if (p === "openai" && openaiCredential) {
+      return openaiCredential.kind === "codex" ? CODEX_DUMMY_API_KEY : openaiCredential.apiKey;
+    }
+    return env[PROVIDERS[p].keyVar]!.trim();
   };
   const explicit = env.PROVIDER?.trim().toLowerCase();
 
@@ -74,16 +92,31 @@ export function resolveProvider(env: Record<string, string | undefined> = proces
       return { error: `PROVIDER="${env.PROVIDER}" is not recognized — use "openrouter", "openai", or "mistral"` };
     }
     const p = explicit as Provider;
-    if (!has(p)) return { error: `PROVIDER=${p} but ${PROVIDERS[p].keyVar} is not set` };
-    return { provider: p, apiKey: env[PROVIDERS[p].keyVar]!.trim() };
+    if (!has(p)) {
+      if (p === "openai") {
+        return { error: `PROVIDER=openai but OPENAI_API_KEY is not set and no Codex login is available (run \`codex login\` or set CODEX_ACCESS_TOKEN)` };
+      }
+      return { error: `PROVIDER=${p} but ${PROVIDERS[p].keyVar} is not set` };
+    }
+    return {
+      provider: p,
+      apiKey: key(p),
+      ...(p === "openai" && openaiCredential?.kind === "codex" ? { authMode: "codex" as const } : {}),
+    };
   }
 
   // No explicit choice — infer. OpenRouter wins ties (widest catalog), then OpenAI, then Mistral.
   for (const p of ["openrouter", "openai", "mistral"] as const) {
-    if (has(p)) return { provider: p, apiKey: env[PROVIDERS[p].keyVar]!.trim() };
+    if (has(p)) {
+      return {
+        provider: p,
+        apiKey: key(p),
+        ...(p === "openai" && openaiCredential?.kind === "codex" ? { authMode: "codex" as const } : {}),
+      };
+    }
   }
 
-  return { error: "no API key configured — set OPENROUTER_API_KEY, OPENAI_API_KEY, or MISTRAL_API_KEY (see .env.example)" };
+  return { error: "no provider configured — set OPENROUTER_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, or run `codex login` (see .env.example)" };
 }
 
 // --- .env file merge: add/update only the keys we own, leave everything else byte-for-byte ---

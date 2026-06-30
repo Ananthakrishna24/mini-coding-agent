@@ -299,6 +299,11 @@ export function toolEntry(name: string, argsJson: string, result: string): ToolE
 
 // A one-line model summary — "deepseek-v4-flash · 131K · $0.50/$1.50 per 1M" — for the footer status,
 // /model, and /status. Falls back to the bare id when the catalog couldn't be reached.
+export function modelSourceLabel(info: ModelInfo): string {
+  if (info.provider === "openai" && info.authMode) return `openai/${info.authMode}`;
+  return info.provider;
+}
+
 export function describeModel(info: ModelInfo | undefined, id: string): string {
   if (!info) return id;
   const short = info.id.split("/").pop() ?? info.id;
@@ -307,7 +312,7 @@ export function describeModel(info: ModelInfo | undefined, id: string): string {
   if (info.context) parts.push(fmtTokens(info.context));
   if (info.promptPrice || info.completionPrice) parts.push(`${fmtPrice(info.promptPrice)}/${fmtPrice(info.completionPrice)} per 1M`);
   if (info.vision) parts.push("👁");
-  parts.push(c.dim(info.provider));
+  parts.push(c.dim(modelSourceLabel(info)));
   return parts.join(" · ");
 }
 

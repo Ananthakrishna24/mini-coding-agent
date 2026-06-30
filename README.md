@@ -60,10 +60,13 @@ minicode "fix the failing test"   # one-shot
 |---|---|
 | **OpenRouter** | ✅ ready |
 | **OpenAI** | ✅ ready |
+| **Codex login** | ✅ ready |
 | **Anthropic** | 🚧 coming soon|
 | **Chinese models** (DeepSeek, Qwen, Kimi…) | 🚧 coming soon |
 
 Drop in an API key and go — switch models anytime with `/model`.
+For ChatGPT/Codex plan auth, run `codex login`, then choose **Codex Login** in `/setup`
+or set `PROVIDER=openai` and `OPENAI_AUTH=codex`.
 
 ## Usage
 

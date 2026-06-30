@@ -9,7 +9,7 @@ import { newSessionId, saveSession, listSessions, loadSession, type SessionMeta 
 import { resetModelPolicy, type ModelPolicy } from "./model_policy";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
-import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS } from "./format";
+import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS, modelSourceLabel } from "./format";
 
 // One scrollback entry. Tool calls, warnings, the user's lines, slash-command output, and run results
 // all land here and render in Ink's <Static> region so they persist as the log scrolls.
@@ -184,7 +184,7 @@ async function syncModel() {
   currentInfo = await modelInfo().catch(() => undefined);
   const eff = getEffort();
   const shortModel = getModel().split("/").pop() ?? getModel();
-  const provider = currentInfo?.provider ?? "";
+  const provider = currentInfo ? modelSourceLabel(currentInfo) : "";
   set({
     modelLabel: describeModel(currentInfo, getModel()) + (eff ? ` · ${eff}` : ""),
     modelName: shortModel,
@@ -287,7 +287,7 @@ const HELP = [
   `  ${c.primary("/model <query>")}    open the picker pre-filtered`,
   `  ${c.primary("/model <id>")}       switch to an exact model id (e.g. an OpenRouter "a/b" id)`,
   `  ${c.primary("/colors")}           change the accent color (presets or #rrggbb)`,
-  `  ${c.primary("/setup")}            add/switch provider + API key (OpenRouter, OpenAI)`,
+  `  ${c.primary("/setup")}            add/switch provider, API key, or Codex login`,
   `  ${c.primary("/status")}           model, context window, working dir`,
   `  ${c.primary("/usage")}            tokens + estimated cost this session`,
   `  ${c.primary("/context")}          context-window usage right now`,
@@ -567,7 +567,7 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
 export const COMMANDS = [
   { name: "/model", desc: "show or switch the model" },
   { name: "/colors", desc: "change the accent color" },
-  { name: "/setup", desc: "add/switch provider + API key" },
+  { name: "/setup", desc: "add/switch provider/auth" },
   { name: "/status", desc: "model, window, working dir" },
   { name: "/usage", desc: "tokens + cost this session" },
   { name: "/context", desc: "context-window usage" },
