@@ -321,6 +321,12 @@ possible** and only judged where they aren't — never ask a judge for something
 
 **What:** `src/eval/judge.ts` + a `npm run eval:quality` entry.
 
+> **Design decision (post-review):** the default judge is NOT a paid API model. The default is
+> harness judging — `eval:quality` prepares per-run `judge-packet.md` files and a `JUDGING.md`
+> brief, a Claude Code / Codex session (already paid for by subscription) writes `score.json`
+> per run, and a second `eval:quality` invocation validates and merges them into `quality.json`.
+> The API judge described below survives behind an explicit `--api` flag for unattended use only.
+
 **How:**
 - Input per case: goal, `rubricNotes`, the seed files, `diff.patch`, the final summary, and the
   trajectory metrics. **Not** the full trajectory by default (cost + judge distraction); add

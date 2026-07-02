@@ -8,8 +8,9 @@ import os from "node:os";
 import path from "node:path";
 import { cases, fileText } from "./eval/cases";
 import { summarize, type Outcome } from "./eval/run-eval";
-import { parseTrajectory, computeMetrics, formatMetrics } from "./eval/metrics";
+import { parseTrajectory, computeMetrics, formatMetrics, type Metrics } from "./eval/metrics";
 import { DIMENSIONS, rubricText } from "./eval/rubrics";
+import { prepareJudging, finalizeJudging } from "./eval/judge";
 
 const ws = fs.mkdtempSync(path.join(os.tmpdir(), "minicode-eval-check-"));
 const byName = (name: string) => {
@@ -112,6 +113,43 @@ try {
   assert.equal(hostile.check({ workspace: ws2, exitCode: 0, stdout: "" }), true, "hostile-whitespace passes after the targeted edit");
 } finally {
   fs.rmSync(ws2, { recursive: true, force: true });
+}
+
+// Harness judging: prepare emits packets for passing runs only; finalize validates score.json,
+// zeros failed runs, and computes gated means.
+const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "minicode-judge-check-"));
+try {
+  const emptyMetrics: Metrics = { turns: 3, promptTokens: 100, completionTokens: 10, toolCalls: 2, toolErrors: 0, editFailures: 0, bareResponses: 0, compactions: 0 };
+  const mkRun = (name: string, pass: boolean) => {
+    const dir = path.join(resultsDir, "model", name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "diff.patch"), "--- a/x\n+++ b/x\n");
+    return { case: name, model: "m", repeat: 1, pass, detail: pass ? "" : "boom", ms: 1, goal: "do the thing", split: "train", summary: "did it", metrics: emptyMetrics, dir };
+  };
+  const records = [mkRun("good-run", true), mkRun("bad-run", false)];
+  fs.writeFileSync(path.join(resultsDir, "run.json"), JSON.stringify({ records }));
+
+  const { pending, skipped } = prepareJudging(resultsDir);
+  assert.equal(pending, 1, "only the passing run needs a score");
+  assert.equal(skipped, 1, "the failing run is skipped");
+  assert.ok(fs.existsSync(path.join(resultsDir, "JUDGING.md")), "judging brief is written");
+  assert.ok(fs.existsSync(path.join(records[0].dir, "judge-packet.md")), "passing run gets a packet");
+  assert.ok(!fs.existsSync(path.join(records[1].dir, "judge-packet.md")), "failing run gets no packet");
+
+  assert.throws(() => finalizeJudging(resultsDir), /missing score\.json/, "finalize demands a score for every passing run");
+
+  const validScores = Object.fromEntries(DIMENSIONS.map((d) => [d.name, 4]));
+  fs.writeFileSync(path.join(records[0].dir, "score.json"), JSON.stringify({ scores: { ...validScores, [DIMENSIONS[0].name]: 6 }, worst_moment: "x" }));
+  assert.throws(() => finalizeJudging(resultsDir), /must be an integer 1–5/, "out-of-range scores are rejected");
+
+  fs.writeFileSync(path.join(records[0].dir, "score.json"), JSON.stringify({ scores: validScores, worst_moment: "took a detour" }));
+  const report = finalizeJudging(resultsDir, "check");
+  assert.equal(report.passRate, 0.5, "pass rate counts all runs");
+  assert.equal(report.meanQualityOverPasses, 4, "mean quality is over passing runs only");
+  assert.equal(report.runs.find((r) => r.case === "bad-run")!.mean, 0, "failed runs score 0");
+  assert.ok(fs.existsSync(path.join(resultsDir, "quality.json")), "quality.json is written");
+} finally {
+  fs.rmSync(resultsDir, { recursive: true, force: true });
 }
 
 console.log("ok — eval self-check passed");

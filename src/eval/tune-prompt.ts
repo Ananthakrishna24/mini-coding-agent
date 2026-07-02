@@ -1,6 +1,8 @@
-// Prompt auto-tuning loop: a strong optimizer model (OPTIMIZER_MODEL) iteratively rewrites the
-// system prompt for a small target model, scored by the eval gauntlet (reliability) plus the rubric
-// judge (quality). Optimizes on the train split only; accepted candidates are validated on holdout.
+// Fully automated prompt-tuning loop: a strong optimizer model (OPTIMIZER_MODEL) iteratively
+// rewrites the system prompt for a small target model, scored by the eval gauntlet (reliability)
+// plus the API rubric judge (JUDGE_MODEL). Both cost API money. The zero-API-judge alternative —
+// Claude Code or Codex acting as judge and optimizer through the harness-driven loop — is the
+// recommended default; see GUIDE.md.
 //   npm run tune -- --target qwen/qwen-2.5-7b-instruct --iterations 6 --repeat 2
 import fs from "node:fs";
 import path from "node:path";
@@ -131,8 +133,9 @@ async function main() {
     process.exit(2);
   }
   const optimizerModel = process.env.OPTIMIZER_MODEL || process.env.JUDGE_MODEL;
-  if (!optimizerModel) {
-    console.error("OPTIMIZER_MODEL (or JUDGE_MODEL) is not set in .env");
+  if (!optimizerModel || !process.env.JUDGE_MODEL) {
+    console.error("this automated loop needs OPTIMIZER_MODEL and JUDGE_MODEL in .env (both are paid API calls).");
+    console.error("to tune without extra API spend, use the harness-driven loop in GUIDE.md instead (Claude Code / Codex as judge + optimizer).");
     process.exit(2);
   }
   const { chat } = await import("../llm");

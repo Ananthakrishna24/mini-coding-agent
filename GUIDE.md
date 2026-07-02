@@ -3,20 +3,22 @@
 How to run the reliability eval, the quality benchmark, and the prompt-optimization loop in this
 repo. Written so an agent can execute it end-to-end without asking questions.
 
+The judging and optimizing are designed to be done by **the coding-agent harness you already pay
+for** (a Claude Code or Codex session working in this repo) — not by extra paid API calls. The only
+API spend is running the small model under test. An automated API-judge path exists behind explicit
+flags for people who want it; it is opt-in, never the default.
+
 ## Prerequisites
 
 1. `npm install` (Node ≥ 20).
-2. A `.env` at the repo root (copy `.env.example`). Required keys:
+2. A `.env` at the repo root (copy `.env.example`). Keys:
 
-| var | purpose |
-|---|---|
-| `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` / `MISTRAL_API_KEY`) | runs the agent under test |
-| `AGENT_MODEL` | default model under test (any `--models` flag overrides it) |
-| `JUDGE_MODEL` | strong model that scores quality, e.g. `anthropic/claude-opus-4.8` |
-| `OPTIMIZER_MODEL` | strong model that rewrites prompts (falls back to `JUDGE_MODEL`) |
-
-The judge and optimizer are called through the same provider client as the agent, so their model
-ids must be reachable with the same key (an OpenRouter key covers all of this).
+| var | required | purpose |
+|---|---|---|
+| `OPENROUTER_API_KEY` (or `OPENAI_API_KEY` / `MISTRAL_API_KEY`) | yes | runs the small model under test |
+| `AGENT_MODEL` | yes | default model under test (`--models` overrides it) |
+| `JUDGE_MODEL` | no | only for the opt-in `--api` judge / `npm run tune` |
+| `OPTIMIZER_MODEL` | no | only for the opt-in automated `npm run tune` |
 
 3. Sanity gates before any eval work, and again before committing:
 
@@ -25,7 +27,7 @@ npm run typecheck
 npm run check
 ```
 
-`npm run check` is offline and free. `npm run eval*` and `npm run tune` spend real money.
+`npm run check` is offline and free. `npm run eval` spends money on the model under test only.
 
 ## Layer 1 — Reliability eval (binary pass/fail)
 
@@ -49,89 +51,107 @@ npm run eval -- --models qwen/qwen-2.5-7b-instruct,openai/gpt-5.4 --repeat 3
 
 Case list and splits live in `src/eval/cases.ts` (`split: "train" | "holdout"`, default train).
 
-## Layer 2 — Quality benchmark (rubric judge)
+## Layer 2 — Quality benchmark (you are the judge)
+
+Quality scoring is a three-step file workflow. No API calls; the agent reading this guide does the
+scoring.
+
+**Step 1 — prepare** (harness command, free):
 
 ```
-npm run eval:quality                           # judges the latest eval-results dir
-npm run eval:quality -- eval-results/<dir>     # judges a specific dir
-npm run eval:quality -- --stability            # double-judges; flags dimensions that disagree by ≥2
+npm run eval:quality                           # prepares the latest eval-results dir
+npm run eval:quality -- eval-results/<dir>     # or a specific dir
 ```
 
-- Requires `JUDGE_MODEL`. The judge scores each **passing** run 1–5 on six anchored dimensions
-  (`src/eval/rubrics.ts`): correctness, minimality, convention_fit, process_efficiency,
-  verification, final_answer_quality. Failing runs score 0 and are never judged — quality can
-  never rescue a run that didn't work.
-- Output: a table plus `quality.json` in the results dir with per-run scores, `passRate`, and
-  `meanQualityOverPasses`.
-- `--stability` flags rubric ambiguity (`unstable: [...]`). If a dimension is flagged often,
-  fix its anchors in `rubrics.ts` — that's rubric noise, not signal.
+This writes `JUDGING.md` at the results root (rubric + instructions + the list of runs to score)
+and a `judge-packet.md` into each passing run's directory. Failing runs are skipped — they score 0
+automatically; quality can never rescue a run that didn't work.
+
+**Step 2 — score** (you, the coding agent):
+
+Follow `JUDGING.md`. For each listed run: read its `judge-packet.md` (task, gold notes, diff, final
+summary, metrics), read `trajectory.jsonl` in the same directory when you need process evidence,
+write the rationale per dimension before deciding its score, then write `score.json` in that run's
+directory. Six anchored 1–5 dimensions (`src/eval/rubrics.ts`): correctness, minimality,
+convention_fit, process_efficiency, verification, final_answer_quality. Be harsh: a 5 must be
+earned, a 3 has visible flaws.
+
+**Step 3 — finalize** (harness command, free):
+
+```
+npm run eval:quality
+```
+
+Run again: it detects the score files, validates them (missing or out-of-range scores fail loudly),
+zeros the failed runs, and writes `quality.json` with per-run scores, `passRate`, and
+`meanQualityOverPasses`, plus a printed table.
 
 The two headline numbers are read together: **pass-rate** (does it work) and **mean quality over
-passes** (is the work good). Combined objective used by the tuner:
+passes** (is the work good). Combined objective:
 `objective = passRate × 100 + meanQuality × 10` — reliability dominates by construction.
 
-## Layer 3 — Automated prompt-optimization loop
+Opt-in API judge (costs money, needs `JUDGE_MODEL`): `npm run eval:quality -- --api`
+(add `--stability` to double-judge and flag dimensions that disagree by ≥2).
 
-```
-npm run tune -- --target qwen/qwen-2.5-7b-instruct
-npm run tune -- --target <model> --iterations 8 --repeat 3 --min-delta 3 --prompt <start-file>
-```
+## Layer 3 — Optimize loop (you are the optimizer)
 
-What one iteration does:
+The recommended loop: the Claude Code / Codex session is both judge and optimizer. Total API spend
+= the target model's eval runs, nothing else.
 
-1. Evaluates the current best prompt on the **train** split of the gauntlet (`--repeat` runs each).
-2. Judges quality; computes the objective.
-3. Feeds the optimizer model the current prompt, the rubric, the scores, and the 3 worst runs
-   (failure detail, judge critique, trajectory tail). The optimizer must change **at most two
-   things**, may not add benchmark-specific hints, must keep the `final_answer` contract, and
-   replies with only the new prompt text.
-4. Evaluates the candidate on train. Accepts only if the objective improves by more than
-   `--min-delta` (the noise band — a delta smaller than run-to-run variance is not a win).
-5. On acceptance, validates on the **holdout** split. Train up + holdout down = overfitting;
-   the candidate is rejected, and two such regressions stop the loop entirely.
-
-Stops after `--iterations`, 3 consecutive rejections, or the overfitting stop. Artifacts land in
-`eval-results/tune-<timestamp>/`: per-iteration candidate prompts, their full eval results, and
-`report.json`.
+1. **Baseline.** `npm run eval -- --split train --repeat 3 --models <target>` then judge it
+   (Layer 2). Record the objective. Do the same once for `--split holdout` and set it aside.
+2. **Diagnose.** Read the worst runs' `trajectory.jsonl`, `judge-packet.md`, and your own
+   `score.json` rationales. Classify each failure: prompt-attributable (instructions ignored,
+   wrong tool habits, prose drift, no verification) vs harness/model-limit (context overflow, API
+   errors). Only the former is fixable here; note the latter as harness todos.
+3. **Write one candidate.** Copy the current prompt (`src/prompts/system.md` or the previous
+   candidate) and change **at most two things**. Concrete imperative instructions beat abstract
+   principles for small models. Never mention benchmark file names, task phrasings, or expected
+   answers — a prompt that names `counter.txt` scores well and learned nothing. Keep the
+   `final_answer` contract intact.
+4. **Evaluate the candidate.** Re-run step 1's train command with the candidate injected:
+   `AGENT_SYSTEM_PROMPT_FILE=<candidate-file> npm run eval -- --split train --repeat 3 --models <target>`
+   then judge it (Layer 2).
+5. **Accept or revert.** Accept only if the objective improves by more than ~3 points (the noise
+   band — a delta smaller than run-to-run variance is not a win). On acceptance, confirm on
+   `--split holdout` before declaring victory. Train up + holdout down = overfitting: revert the
+   candidate; if it happens twice, stop tuning and widen the gauntlet instead.
+6. **Repeat** from step 2 until two or three candidates in a row fail to clear the bar — that's
+   convergence, not failure.
 
 Installing a winner:
 
 ```
 mkdir -p src/prompts/tuned
-cp eval-results/tune-<ts>/iter-<n>/system.candidate.md src/prompts/tuned/<model-slug>.md
+cp <candidate-file> src/prompts/tuned/<model-slug>.md
 AGENT_SYSTEM_PROMPT_FILE=src/prompts/tuned/<model-slug>.md npm run dev
 ```
 
-Commit tuned prompts to git — they are reviewable artifacts, not scratch.
+Commit tuned prompts to git — they are reviewable artifacts, not scratch. Keep a short log of
+accepted/rejected candidates and their objectives in the PR description or a notes file; the next
+session needs it to avoid retrying dead ends.
 
-## Manual optimize loop (when you are the optimizer)
+### Opt-in: fully automated loop (paid API)
 
-An agent (Claude Code / Codex) can run the loop itself instead of `npm run tune` — same
-discipline, human-grade diagnosis:
-
-1. Baseline: `npm run eval -- --split train --repeat 3 --models <target>` then
-   `npm run eval:quality`. Record objective.
-2. Read the worst runs' `trajectory.jsonl` and `quality.json` `worst_moment` fields. Diagnose
-   whether the failure is prompt-attributable (instructions ignored, wrong tool habits, prose
-   drift) or harness/model-limit (context overflow, API errors) — only the former is fixable here.
-3. Write a candidate prompt file (start from `src/prompts/system.md`). Change at most two things.
-   Never reference benchmark file names or tasks in the prompt.
-4. Re-run step 1 with `AGENT_SYSTEM_PROMPT_FILE=<candidate>` in the environment.
-5. Accept only if the objective improves by more than ~3 points; then confirm on
-   `--split holdout` before declaring victory. Revert anything that wins train but loses holdout.
+`npm run tune -- --target <model> [--iterations 6] [--repeat 2] [--min-delta 3]` runs the same
+loop unattended with `OPTIMIZER_MODEL` writing candidates and `JUDGE_MODEL` scoring — both paid
+API calls. Same acceptance rules (min-delta on train, holdout validation, overfit stop). Artifacts
+land in `eval-results/tune-<timestamp>/`. Use it only when you explicitly want to spend API money
+on unattended tuning.
 
 ## Rules that keep the numbers honest
 
 - **Never compare single runs.** `--repeat 3` minimum; compare pass-rates and means.
 - **Quality is gated on pass.** Do not change this — it is what stops the loop from learning
   beautiful diffs that don't work.
-- **Holdout is sacred.** The optimizer (automated or you) must never see holdout trajectories
-  while writing a candidate. If holdout keeps regressing, the gauntlet is too small — add cases
-  to `src/eval/cases.ts`, don't loosen the rule.
-- **Prompts must stay task-agnostic.** A prompt that names `counter.txt` scores well and learned
-  nothing.
-- **Watch spend.** Metrics include real token counts per run; the tuner prints per-iteration
-  spend. A full tune at defaults ≈ (cases × repeat × ~2) agent runs + judge calls per iteration.
+- **Holdout is sacred.** Never read holdout trajectories while writing a candidate — judge them,
+  record the number, look no deeper. If holdout keeps regressing, the gauntlet is too small — add
+  cases to `src/eval/cases.ts`, don't loosen the rule.
+- **Judge before you diagnose.** Score runs (Layer 2) before deciding what to change; writing the
+  candidate first biases your own scoring.
+- **Prompts must stay task-agnostic.** No benchmark file names, phrasings, or answers in any
+  candidate.
+- **Watch spend.** Metrics include real token counts per run; sum them before choosing `--repeat`.
 - **Never push to `main`.** Work on a feature branch; eval artifacts (`eval-results/`) are
   gitignored and must stay out of commits.
 
