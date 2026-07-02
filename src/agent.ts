@@ -8,6 +8,7 @@ import { getModelPolicy, setModelPolicy } from "./model_policy";
 import { loadMemory } from "./memory";
 import { skillsPromptBlock } from "./skills";
 import { thinkingVerb, toolVerb } from "./format";
+import { logEvent, clipForLog } from "./trajectory";
 import type { UI } from "./ui";
 
 // Loop guards to prevent infinite runs, stalls, or tight loops.
@@ -56,8 +57,11 @@ function buildSystemPrompt(): string {
 
   // Load project memory/notes.
   const memory = loadMemory(process.cwd(), getContextWindow());
-  // Apply provider-specific rules.
-  const rules = getProvider() === "openai" ? `${SYSTEM_RULES}\n\n${OPENAI_RULES}` : SYSTEM_RULES;
+  // Apply provider-specific rules, unless an override prompt file is set (used by the tuning loop).
+  const overrideFile = process.env.AGENT_SYSTEM_PROMPT_FILE;
+  const rules = overrideFile
+    ? readFileSync(overrideFile, "utf8").trim()
+    : getProvider() === "openai" ? `${SYSTEM_RULES}\n\n${OPENAI_RULES}` : SYSTEM_RULES;
   // Include skills index if present.
   const skills = skillsPromptBlock();
   // Return the combined system prompt, wrapping dynamic values in XML tags.
@@ -134,6 +138,14 @@ export async function run(
     if (!choice) throw new Error("model returned no choices");
     const msg = choice.message;
     messages.push(msg);
+    logEvent({
+      type: "assistant",
+      turn,
+      depth,
+      content: contentText(msg.content),
+      tool_calls: msg.tool_calls?.map((c) => (c.type === "function" ? { name: c.function.name, arguments: c.function.arguments } : { type: c.type })),
+    });
+    if (res.usage) logEvent({ type: "usage", turn, depth, prompt_tokens: res.usage.prompt_tokens ?? 0, completion_tokens: res.usage.completion_tokens ?? 0 });
 
     // Render reasoning duration if available (e.g. from OpenRouter).
     const reasoning = (msg as any).reasoning;
@@ -149,10 +161,9 @@ export async function run(
     if (!msg.tool_calls?.length) {
       const text = contentText(msg.content);
       if (++bareResponses >= BARE_RESPONSE_LIMIT) {
-        return {
-          success: false,
-          summary: `stopped: model replied without calling final_answer${text ? ` — last reply: ${clipText(text)}` : ""}`,
-        };
+        const summary = `stopped: model replied without calling final_answer${text ? ` — last reply: ${clipText(text)}` : ""}`;
+        logEvent({ type: "final", depth, success: false, summary, turns: turn + 1 });
+        return { success: false, summary };
       }
       messages.push({
         role: "user",
@@ -299,14 +310,29 @@ export async function run(
 
     // Append tool results to history.
     for (let idx = 0; idx < calls.length; idx++) {
-      messages.push({ role: "tool", tool_call_id: calls[idx].id, content: results[idx] ?? "error: tool call not processed" });
+      const content = results[idx] ?? "error: tool call not processed";
+      messages.push({ role: "tool", tool_call_id: calls[idx].id, content });
+      const call = calls[idx];
+      logEvent({
+        type: "tool_result",
+        turn,
+        depth,
+        name: call.type === "function" ? call.function.name : call.type,
+        args: call.type === "function" ? clipForLog(call.function.arguments) : "",
+        result: clipForLog(content),
+      });
     }
-    if (terminal) return terminal;
+    if (terminal) {
+      logEvent({ type: "final", depth, success: terminal.success, summary: terminal.summary, turns: turn + 1 });
+      return terminal;
+    }
 
     // Stall guard: stop if no progress is made for several turns.
     if (progressed) stall = 0;
     else if (++stall >= STALL_LIMIT) {
-      return { success: false, summary: `stopped: no progress in ${STALL_LIMIT} turns — the model looks stuck` };
+      const summary = `stopped: no progress in ${STALL_LIMIT} turns — the model looks stuck`;
+      logEvent({ type: "final", depth, success: false, summary, turns: turn + 1 });
+      return { success: false, summary };
     }
 
     // Track and report context usage.
@@ -323,6 +349,7 @@ export async function run(
     // - summary (90%): LLM summarizes history
     // - drop (98%): emergency message drop
     const compaction = compact(messages, budget);
+    if (compaction.tier !== "none") logEvent({ type: "compaction", turn, depth, tier: compaction.tier, tokensFreed: compaction.tokensFreed });
     if (compaction.tier === "micro") {
       ui.debug(`micro-compact: ${compaction.description}`);
     } else if (compaction.tier === "summary") {
@@ -368,5 +395,7 @@ export async function run(
     }
   }
 
-  return { success: false, summary: `stopped: hit ${MAX_TURNS}-turn limit` };
+  const summary = `stopped: hit ${MAX_TURNS}-turn limit`;
+  logEvent({ type: "final", depth, success: false, summary, turns: MAX_TURNS });
+  return { success: false, summary };
 }

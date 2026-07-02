@@ -50,11 +50,16 @@ let client = buildClient(provider); // rebuilt by setModel when the active model
 export async function chat(
   messages: OpenAI.ChatCompletionMessageParam[],
   tools?: OpenAI.ChatCompletionTool[],
-  opts?: { model?: string; effort?: string | null; signal?: AbortSignal },
+  opts?: { model?: string; effort?: string | null; signal?: AbortSignal; toolChoice?: OpenAI.ChatCompletionToolChoiceOption; temperature?: number },
 ) {
   const useModel = opts?.model ?? model;
   const useEffort = opts && "effort" in opts ? opts.effort ?? null : effort;
-  const base = { model: useModel, messages, ...(tools ? { tools, tool_choice: "auto" } : {}) };
+  const base = {
+    model: useModel,
+    messages,
+    ...(tools ? { tools, tool_choice: opts?.toolChoice ?? "auto" } : {}),
+    ...(opts?.temperature !== undefined ? { temperature: opts.temperature } : {}),
+  };
   const create = (extra: Record<string, unknown>, reqOpts?: { signal?: AbortSignal }) =>
     // cast: `reasoning` (OpenRouter) isn't in the SDK type
     client.chat.completions.create({ ...base, ...extra } as OpenAI.ChatCompletionCreateParamsNonStreaming, reqOpts);
