@@ -21,6 +21,8 @@
     "start": "tsx --env-file=.env src/index.ts",
     "check": "tsx src/tools.check.ts && tsx src/context.check.ts && tsx src/permissions.check.ts && tsx src/sandbox.check.ts && tsx src/diff.check.ts && tsx src/md.check.ts && tsx src/format.check.ts && tsx src/memory.check.ts && tsx src/spawn_agent.check.ts && tsx src/provider.check.ts && tsx src/images.check.ts && tsx src/workspace.check.ts && tsx src/skills.check.ts && tsx src/eval.check.ts",
     "eval": "tsx src/eval/run-eval.ts",
+    "eval:quality": "tsx src/eval/judge.ts",
+    "tune": "tsx src/eval/tune-prompt.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsup src/index.ts --format esm --target node20 --minify --loader .md=text --clean",
     "prepublishOnly": "npm run check && npm run build"
