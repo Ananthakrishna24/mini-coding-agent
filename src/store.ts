@@ -7,6 +7,7 @@ import { attachImages } from "./images";
 import { inputBudget } from "./context";
 import { newSessionId, saveSession, listSessions, loadSession, type SessionMeta } from "./sessions";
 import { resetModelPolicy, type ModelPolicy } from "./model_policy";
+import { isDebugMode, enableDebugMode, disableDebugMode } from "./debug_mode";
 import type { UI } from "./ui";
 import { homedir } from "node:os";
 import { c, describeModel, fmtTokens, fmtPrice, bannerLines, getPrimaryColor, setPrimaryColor, COLOR_PRESETS } from "./format";
@@ -292,6 +293,7 @@ const HELP = [
   `  ${c.primary("/usage")}            tokens + estimated cost this session`,
   `  ${c.primary("/context")}          context-window usage right now`,
   `  ${c.primary("/resume")}           reopen a past chat session (↑↓ choose, ⏎ resume, esc cancel)`,
+  `  ${c.primary("/debug")}            toggle evidence-first debug mode (probe ingest + runtime logs)`,
   `  ${c.primary("/clear")}            clear the scrollback`,
   `  ${c.primary("/help")}             this list`,
   `  ${c.dim("exit · Ctrl-C")}     quit`,
@@ -556,6 +558,23 @@ export async function submit(input: string, onExit: () => void): Promise<void> {
       return openSetup();
     case "/resume":
       return openResumePicker();
+    case "/debug": {
+      if (!isDebugMode()) {
+        const { endpoint, logPath } = await enableDebugMode();
+        return push({
+          kind: "info",
+          lines: [
+            c.green("✔ debug mode on"),
+            `  ingest   ${endpoint}`,
+            `  log      ${logPath}`,
+            c.dim("  describe the bug next — the agent will instrument first, fix second"),
+            c.dim("  /debug again turns it off"),
+          ],
+        });
+      }
+      await disableDebugMode();
+      return push({ kind: "info", lines: [c.green("✔ debug mode off")] });
+    }
     case "/clear":
       return freshSession();
     default:
@@ -572,6 +591,7 @@ export const COMMANDS = [
   { name: "/usage", desc: "tokens + cost this session" },
   { name: "/context", desc: "context-window usage" },
   { name: "/resume", desc: "reopen a past chat session" },
+  { name: "/debug", desc: "toggle evidence-first debug mode" },
   { name: "/clear", desc: "clear the scrollback" },
   { name: "/help", desc: "list commands" },
 ];

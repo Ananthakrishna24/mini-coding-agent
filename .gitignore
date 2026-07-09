@@ -6,4 +6,5 @@ node_modules/
 dist/
 INTERNAL/
 test_project/
+Test_Projects/
 eval-results/

@@ -7,6 +7,7 @@ import { countMessages, overBudget, compact, inputBudget, formatCompactSummary, 
 import { getModelPolicy, setModelPolicy } from "./model_policy";
 import { loadMemory } from "./memory";
 import { skillsPromptBlock } from "./skills";
+import { isDebugMode, debugPromptBlock } from "./debug_mode";
 import { thinkingVerb, toolVerb } from "./format";
 import { logEvent, clipForLog } from "./trajectory";
 import type { UI } from "./ui";
@@ -109,6 +110,11 @@ export async function run(
 ): Promise<RunResult> {
   const messages: OpenAI.ChatCompletionMessageParam[] = history ?? [];
   if (messages.length === 0) messages.push({ role: "system", content: buildSystemPrompt() });
+  if (depth === 0 && isDebugMode()) {
+    const block = debugPromptBlock();
+    const already = messages.some((m) => m.role === "system" && typeof m.content === "string" && m.content.includes("<debug-mode>"));
+    if (block && !already) messages.push({ role: "system", content: block });
+  }
   messages.push({ role: "user", content: goal });
 
   const schemas = schemasFor(depth); // depth gates spawning capability
