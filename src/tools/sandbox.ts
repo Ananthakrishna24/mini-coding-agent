@@ -5,6 +5,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { WORKSPACE } from "./workspace";
+import { isDebugMode } from "../debug_mode";
 
 export type PreparedCommand = {
   program: string;
@@ -91,6 +92,7 @@ export async function prepareBashCommand(command: string, workspace = WORKSPACE)
       args: [
         "--die-with-parent",
         "--unshare-all",
+        ...(isDebugMode() ? ["--share-net"] : []),
         "--ro-bind",
         "/",
         "/",
