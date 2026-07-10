@@ -118,7 +118,7 @@ export async function run(
   messages.push({ role: "user", content: goal });
 
   const schemas = schemasFor(depth); // depth gates spawning capability
-  const seen = new Map<string, number>(); // signature -> count to detect loops
+  const seen = new Map<string, { count: number; lastResult?: string }>(); // signature -> repeat state to detect loops
   const subSessions = new Map<string, OpenAI.ChatCompletionMessageParam[]>();
   let subCounter = 0;
   let stall = 0; // turns without progress
@@ -210,10 +210,14 @@ export async function run(
         continue;
       }
 
-      // Stop if identical tool call is repeated.
+      // Stop if identical tool call is repeated — but only when its results are also
+      // identical; a re-run that returns something new (e.g. re-running a repro after
+      // an edit) is progress, not a loop, and resets the counter below.
       const sig = `${call.function.name}(${call.function.arguments})`;
-      const count = (seen.get(sig) ?? 0) + 1;
-      seen.set(sig, count);
+      const rec = seen.get(sig) ?? { count: 0 };
+      rec.count += 1;
+      seen.set(sig, rec);
+      const count = rec.count;
       if (count >= REPEAT_LIMIT) {
         const stop = `stopped: repeated ${call.function.name} with the same arguments ${count}×`;
         results[idx] = stop;
@@ -297,6 +301,8 @@ export async function run(
       }
       ui.thinking(false);
       results[idx] = result;
+      if (rec.lastResult !== undefined && rec.lastResult !== result) rec.count = 1;
+      rec.lastResult = result;
       ui.tool(call.function.name, call.function.arguments, result);
       if (opts?.signal?.aborted) {
         return { success: false, summary: "Interrupted by user" };
