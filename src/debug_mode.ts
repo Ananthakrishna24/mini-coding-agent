@@ -28,6 +28,12 @@ export async function enableDebugMode(): Promise<{ endpoint: string; logPath: st
   logPath = path.join(process.cwd(), ".mini-agent", `debug-${Date.now().toString(36)}.log`);
   mkdirSync(path.dirname(logPath), { recursive: true });
   const srv = http.createServer((req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "content-type");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204).end();
+      return;
+    }
     if (req.method === "POST" && req.url === "/ingest") {
       const chunks: Buffer[] = [];
       req.on("data", (c) => chunks.push(c));
